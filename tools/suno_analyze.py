@@ -129,20 +129,74 @@ class Measure:
         return float(idx[0] * 5) if len(idx) else None
 
     def offset_stats(self):
-        rises, wets, rel = [], [], []
+        """Wet swell after the vocal stops. Short pauses (< 360 ms) and long pauses (>= 400 ms) are kept
+        apart: in short pauses a slow duck release cannot fully open, so mixing them hides the depth."""
+        rises, wets, rel, rs, rl, tpk = [], [], [], [], [], []
         for i, j, k in self.offs:
             pre_s = np.median(self.es[max(i, j - 20):j])
-            post = self.es[j + 4:min(k, j + 50)]
+            post = self.es[j + 4:min(k, j + 160)]          # up to 800 ms: Suno's swell is slow
             if len(post) < 8: continue
-            rises.append(post.max() - pre_s)
+            r = post.max() - pre_s
+            rises.append(r)
             dry = np.median(self.em[max(i, j - 60):j])
             wets.append(post.max() - dry)
             tgt = pre_s + 0.9 * (post.max() - pre_s)
             t = np.where(post >= tgt)[0]
             rel.append((t[0] + 4) * 5 if len(t) else np.nan)
+            gap = (k - j) * 5
+            if gap < 360: rs.append(r)
+            elif gap >= 400: rl.append(r); tpk.append((np.argmax(post) + 4) * 5)
         if not rises: return None
         return dict(rise_db=float(np.median(rises)), wet_re_dry_db=float(np.median(wets)),
-                    rise_time_ms=float(np.nanmedian(rel)), n=len(rises))
+                    rise_time_ms=float(np.nanmedian(rel)), n=len(rises),
+                    rise_short_db=float(np.median(rs)) if rs else None, rise_long_db=float(np.median(rl)) if rl else None,
+                    peak_time_long_ms=float(np.median(tpk)) if tpk else None, n_short=len(rs), n_long=len(rl))
+
+    def early_side_db(self):
+        """Side relative to Mid 20-150 ms after onsets that follow real silence (before the reverb arrives):
+        how much width layer is present at the very start of a section."""
+        if not self.ons: return None
+        v = [np.median(self.es[o + 4:o + 30] - self.em[o + 4:o + 30]) for o in self.ons if o + 30 < len(self.es)]
+        return float(np.median(v)) if v else None
+
+    def singing_width_db(self):
+        """Side relative to Mid while singing (reverb under the voice + width layer)."""
+        return float(np.median((self.es - self.em)[self.sing])) if self.sing.sum() > 100 else None
+
+    def coh_profile(self):
+        """Dry-correlated side component (width layer): excess coherence between S and M over a
+        time-shifted baseline, power-weighted. Returns broadband value, octave-band profile,
+        K-ratio (coherence over 340 ms vs 43 ms windows; lower = more detune/modulation) and bloom
+        ratio (first 100 ms of phrases vs later)."""
+        N, hop = 1024, 512
+        f, t, ZM = signal.stft(self.M, SR, nperseg=N, noverlap=N - hop, boundary=None, padded=False)
+        _, _, ZS = signal.stft(self.S, SR, nperseg=N, noverlap=N - hop, boundary=None, padded=False)
+        sing = np.array([self.sing[min(len(self.sing) - 1, int(tt / 0.005))] for tt in t])
+        ZM0 = np.roll(ZM, 300, axis=1)
+        def ex_map(K, lo, hi):
+            sel = (f >= lo) & (f < hi)
+            sm = lambda a: uniform_filter1d(a, K, axis=1)
+            Syy = sm(np.abs(ZS[sel]) ** 2)
+            c = np.abs(sm(ZS[sel] * np.conj(ZM[sel]))) ** 2 / (sm(np.abs(ZM[sel]) ** 2) * Syy + 1e-20)
+            c0 = np.abs(sm(ZS[sel] * np.conj(ZM0[sel]))) ** 2 / (sm(np.abs(ZM0[sel]) ** 2) * Syy + 1e-20)
+            w = np.abs(ZM[sel]) ** 2
+            return ((c - c0) * w).sum(0) / (w.sum(0) + 1e-20)
+        ex8 = ex_map(8, 200, 4000)
+        out = dict(broad=float(np.median(ex8[sing])))
+        out["bands"] = {str(c): float(np.median(ex_map(8, c / np.sqrt(2), c * np.sqrt(2))[sing])) for c in (250, 500, 1000, 2000, 4000)}
+        k4, k32 = np.median(ex_map(4, 200, 4000)[sing]), np.median(ex_map(32, 200, 4000)[sing])
+        out["k_ratio"] = float(k32 / k4) if k4 > 1e-4 else None
+        # bloom: time since phrase start
+        tss = np.full(len(t), np.nan); i = 0
+        while i < len(t):
+            if sing[i] and (i == 0 or not sing[i - 1]):
+                j = i
+                while j < len(t) and sing[j]: tss[j] = t[j] - t[i]; j += 1
+                i = j
+            else: i += 1
+        early, late = ex8[(tss >= 0) & (tss < 0.1)], ex8[tss >= 0.2]
+        out["bloom_ratio"] = float(np.median(early) / np.median(late)) if len(early) > 20 and np.median(late) > 1e-3 else None
+        return out
 
     def gap_mask(self):
         g = np.zeros(len(self.em), bool)
@@ -176,7 +230,9 @@ class Measure:
             self._emb = env5(np.sqrt((l ** 2 + r ** 2) / 2))
         e, sl = self._emb, []
         for i, j, k in self.offs:
-            s0, s1 = j + start_ms // 5, min(k, j + 400)
+            # start after the wet swell has peaked (duck released), at least start_ms after the vocal stops
+            pk = j + 4 + int(np.argmax(e[j + 4:min(k, j + 160)])) if min(k, j + 160) > j + 4 else j
+            s0, s1 = max(j + start_ms // 5, pk), min(k, j + 400)
             if s1 - s0 < 30: continue
             t = np.arange(s1 - s0) * 0.005
             sl.append(np.polyfit(t, e[s0:s1], 1)[0])
@@ -248,10 +304,13 @@ def render(renderer, params, dry, tmp):
     return np.fromfile(fout, dtype=np.float32).reshape(-1, 2).astype(np.float64)
 
 
-def wet_measures(m):
+def wet_measures(m, ons=None):
+    if ons is not None: m.ons = list(ons)      # renders are measured at the Suno section starts
     o = m.offset_stats() or {}
     return dict(arrival=m.wet_arrival_ms(), rise=o.get("rise_db"), wet=o.get("wet_re_dry_db"),
-                rise_time=o.get("rise_time_ms"), width=m.width_db(), curve=m.wet_curve(), decay=m.gap_decay())
+                rise_time=o.get("rise_time_ms"), rise_short=o.get("rise_short_db"), rise_long=o.get("rise_long_db"),
+                peak_long=o.get("peak_time_long_ms"), width=m.width_db(), curve=m.wet_curve(), decay=m.gap_decay(),
+                sing_width=m.singing_width_db(), early_side=m.early_side_db(), coh=m.coh_profile())
 
 
 def main():
@@ -280,9 +339,12 @@ def main():
              delayOn=False, delayMs=375, delayFeedback=0.25, delayLevelDb=-18, delayHpf=300, delayLpf=5000, delayPingPong=True,
              reverbOn=True, predelayMs=max(0.0, (T["arrival"] or 190) - 10),
              rt60=float(np.clip(-60 / T["decay"]["slope_db_s"], 1.0, 8.0)) if T["decay"] and T["decay"]["slope_db_s"] < -1 else 3.0,
-             rt60LowMul=1.0, rt60HighMul=0.7, crossoverHz=1500, size=1.0, modDepth=0.5, earlyMs=22, earlyLevelDb=-8,
-             width=1.0, reverbLevelDb=-10.0, duckDb=max(0.0, T["rise"] or 6), duckAttackMs=5,
-             duckReleaseMs=max(30.0, T["rise_time"] or 120))
+             rt60LowMul=1.0, rt60HighMul=0.7, crossoverHz=1500, size=1.0, modDepth=2.5, diffusion=0.75, diffusionSize=2.0,
+             earlyMs=22, earlyLevelDb=-100,
+             width=1.0, reverbLevelDb=-5.0, duckDb=max(3.0, T["rise_long"] or T["rise"] or 8), duckAttackMs=5,
+             duckReleaseMs=max(60.0, 0.8 * (T["peak_long"] or 200)),
+             widthOn=True, widthLevelDb=-28.0, widthDelayMs=1.0, widthShiftHz=1.0, widthTiltDb=0.0, widthHpf=200.0, widthLpf=16000.0,
+             widthBloomDb=12.0, widthBloomMs=200.0)
     P.update({k: v for k, v in fit_wet_eq(T["curve"]).items() if k != "rms_err_db"} if T["curve"] is not None else {})
     if dly and dly["prominence"] > 0.3:
         P.update(delayOn=True, delayMs=dly["time_ms"])
@@ -293,57 +355,120 @@ def main():
     g = uniform_filter1d(g, int(0.01 * SR))
     dry = np.stack([m.M * g, m.M * g], 1)
 
-    hist, best = [], None
+    def logit(v): v = float(np.clip(v, 1e-3, 0.95)); return np.log(v / (1 - v))
+    def errors(T, R):
+        e = dict(arrival=(T["arrival"] or 0) - (R["arrival"] or 0),
+                 rise_long=(T["rise_long"] or 0) - (R["rise_long"] or 0),
+                 rise_short=(T["rise_short"] or 0) - (R["rise_short"] or 0),
+                 sing_width=(T["sing_width"] or 0) - (R["sing_width"] or 0),
+                 gap_width=(T["width"] or 0) - (R["width"] or 0),
+                 rt=((T["decay"] or {}).get("slope_db_s") or -1) / ((R["decay"] or {}).get("slope_db_s") or -1),
+                 layer=logit(T["coh"]["broad"]) - logit(R["coh"]["broad"]),
+                 k_ratio=(T["coh"]["k_ratio"] or 0) - (R["coh"]["k_ratio"] or 0),
+                 early_side=(T["early_side"] or 0) - (R["early_side"] or 0),
+                 bloom=(T["coh"]["bloom_ratio"] or 0) - (R["coh"]["bloom_ratio"] or 0))
+        return e
+    def score(e):
+        return ((e["arrival"] / 20) ** 2 + (e["rise_long"] / 1.5) ** 2 + (e["rise_short"] / 1.5) ** 2 + (e["sing_width"] / 1.0) ** 2
+                + (e["gap_width"] / 1.5) ** 2 + ((np.log(e["rt"]) / np.log(1.3)) ** 2 if e["rt"] > 0 else 25)
+                + (e["layer"] / 0.3) ** 2 + (e["k_ratio"] / 0.08) ** 2 + (e["early_side"] / 4.0) ** 2 + (e["bloom"] / 0.1) ** 2)
+
+    hist = []
     if not os.path.exists(a.renderer):
         log("renderer not found, skipping closed-loop fit"); a.iters = 0
+    # Stage A target for the reverb: Suno's side while singing minus the part explained by the width layer
+    TA = dict(T)
+    if T["sing_width"] is not None:
+        TA["sing_width"] = T["sing_width"] + 10 * np.log10(max(0.05, 1 - T["coh"]["broad"]))
+    def scoreA(e):
+        return ((e["arrival"] / 20) ** 2 + (e["rise_long"] / 1.5) ** 2 + (e["rise_short"] / 1.5) ** 2 + (e["sing_width"] / 1.0) ** 2
+                + (e["gap_width"] / 1.5) ** 2 + ((np.log(e["rt"]) / np.log(1.3)) ** 2 if e["rt"] > 0 else 25))
+    def scoreB(e):
+        return (e["layer"] / 0.3) ** 2 + (e["k_ratio"] / 0.08) ** 2 + (e["bloom"] / 0.1) ** 2 + (e["early_side"] / 3.0) ** 2
     with tempfile.TemporaryDirectory() as tmp:
-        for it in range(a.iters):
-            y = render(a.renderer, P, dry, tmp)
-            R = wet_measures(Measure(y))
-            err = dict(arrival=(T["arrival"] or 0) - (R["arrival"] or 0), rise=(T["rise"] or 0) - (R["rise"] or 0),
-                       wet=(T["wet"] or 0) - (R["wet"] or 0), width=(T["width"] or 0) - (R["width"] or 0),
-                       rt=((T["decay"] or {}).get("slope_db_s") or -1) / ((R["decay"] or {}).get("slope_db_s") or -1))
-            hist.append(err)
-            score = (err["arrival"] / 20) ** 2 + (err["rise"] / 1.5) ** 2 + (err["wet"] / 1.5) ** 2 + (err["width"] / 1.5) ** 2 \
-                + (np.log(err["rt"]) / np.log(1.3)) ** 2 if err["rt"] > 0 else 99
-            if best is None or score < best[0]: best = (score, dict(P))
-            log(f"iter {it}: " + "  ".join(f"{k} {v:+.2f}" for k, v in err.items()))
-            P["predelayMs"] = float(np.clip(P["predelayMs"] + err["arrival"], 0, 500))
-            P["duckDb"] = float(np.clip(P["duckDb"] + 0.8 * err["rise"], 0, 24))
-            P["reverbLevelDb"] = float(np.clip(P["reverbLevelDb"] + 0.8 * err["wet"], -40, 6))
-            P["width"] = float(np.clip(P["width"] * 10 ** (err["width"] / 20), 0.0, 1.6))
+        # ---------------- stage A: reverb + ducking (width layer off) ----------------
+        best = None
+        itA = a.iters
+        for it in range(itA):
+            y = render(a.renderer, dict(P, widthOn=False), dry, tmp)
+            R = wet_measures(Measure(y), m.ons); err = errors(TA, R); sc_ = scoreA(err)
+            hist.append({"stage": "A", **{k: round(float(v), 3) for k, v in err.items()}})
+            if best is None or sc_ < best[0]: best = (sc_, dict(P))
+            log(f"A{it}: score {sc_:6.2f} " + "  ".join(f"{k} {err[k]:+.2f}" for k in ("arrival", "rise_long", "rise_short", "sing_width", "gap_width", "rt")))
+            P["predelayMs"] = float(np.clip(P["predelayMs"] + 0.7 * err["arrival"], 0, 500))
+            P["duckDb"] = float(np.clip(P["duckDb"] + 0.5 * err["rise_long"], 0, 24))
+            P["duckReleaseMs"] = float(np.clip(P["duckReleaseMs"] * 10 ** (-0.04 * (err["rise_short"] - 0.5 * err["rise_long"])), 30, 1500))
+            P["reverbLevelDb"] = float(np.clip(P["reverbLevelDb"] + 0.5 * (err["sing_width"] + 0.5 * err["rise_long"]), -40, 8))
+            P["width"] = float(np.clip(P["width"] * 10 ** (0.7 * err["gap_width"] / 20), 0.0, 1.6))
             if T["decay"] and R["decay"] and err["rt"] > 0:
-                P["rt60"] = float(np.clip(P["rt60"] / err["rt"] ** 0.8, 0.5, 10))
+                P["rt60"] = float(np.clip(P["rt60"] / np.clip(err["rt"], 0.8, 1.25) ** 0.6, 0.8, 8))
             if T["curve"] is not None and R["curve"] is not None:
                 f = np.array(CENTERS, float)
                 cur = norm_curve(biquad_db('hp', P["wetHpf"], 0.9, 0, f) + biquad_db('lp', P["wetLpf"], 0.8, 0, f)
                                  + biquad_db('pk', P["wetBumpHz"], 1.0, P["wetBumpDb"], f))
                 P.update({k: v for k, v in fit_wet_eq(cur + 0.5 * (T["curve"] - R["curve"])).items() if k != "rms_err_db"})
-        if a.iters:
-            P = best[1]
-            log(f"best iteration score {best[0]:.2f}")
+        if itA: P = best[1]; log(f"stage A best score {best[0]:.2f}")
+        # ---------------- stage B: width layer on top of the fixed reverb ----------------
+        best = None
+        itB = max(0, a.iters // 2 + 2) if a.iters else 0
+        for it in range(itB):
             y = render(a.renderer, P, dry, tmp)
-            R = wet_measures(Measure(y))
+            R = wet_measures(Measure(y), m.ons); err = errors(T, R); sc_ = scoreB(err)
+            hist.append({"stage": "B", **{k: round(float(v), 3) for k, v in err.items()}})
+            if best is None or sc_ < best[0]: best = (sc_, dict(P))
+            log(f"B{it}: score {sc_:6.2f} " + "  ".join(f"{k} {err[k]:+.2f}" for k in ("layer", "k_ratio", "bloom", "sing_width", "early_side")))
+            P["widthLevelDb"] = float(np.clip(P["widthLevelDb"] + 4.0 * err["layer"], -45, -8))
+            tb, rb = T["coh"]["bands"], R["coh"]["bands"]
+            lo_err = np.log((tb["250"] + 1e-3) / (tb["1000"] + 1e-3)) - np.log((rb["250"] + 1e-3) / (rb["1000"] + 1e-3))
+            hi_err = np.log((tb["4000"] + 1e-3) / (tb["1000"] + 1e-3)) - np.log((rb["4000"] + 1e-3) / (rb["1000"] + 1e-3))
+            P["widthHpf"] = float(np.clip(P["widthHpf"] * np.exp(-0.5 * lo_err), 60, 800))
+            P["widthTiltDb"] = float(np.clip(P["widthTiltDb"] + 4.0 * hi_err, -6, 15))
+            if T["coh"]["k_ratio"] and R["coh"]["k_ratio"]:
+                # more frequency shift = faster phase rotation = lower coherence over long windows
+                P["widthShiftHz"] = float(np.clip(P["widthShiftHz"] * np.exp(-3.0 * err["k_ratio"]), 0.05, 8.0))
+            if T["coh"]["bloom_ratio"] and R["coh"]["bloom_ratio"]:
+                P["widthBloomMs"] = float(np.clip(P["widthBloomMs"] * np.exp(-2.0 * err["bloom"]), 30, 800))
+            if T["early_side"] is not None and R["early_side"] is not None:
+                P["widthBloomDb"] = float(np.clip(P["widthBloomDb"] - 0.6 * err["early_side"], 0, 40))
+        if itB: P = best[1]; log(f"stage B best score {best[0]:.2f}")
+        # ---------------- stage C: trim the reverb level so the width while singing matches with the layer on ----------------
+        for it in range(2 if a.iters else 0):
+            y = render(a.renderer, P, dry, tmp)
+            R = wet_measures(Measure(y), m.ons); err = errors(T, R)
+            log(f"C{it}: sing_width {err['sing_width']:+.2f}  rise_long {err['rise_long']:+.2f}")
+            P["reverbLevelDb"] = float(np.clip(P["reverbLevelDb"] + 0.9 * err["sing_width"], -40, 8))
+        if a.iters:
+            y = render(a.renderer, P, dry, tmp)
+            R = wet_measures(Measure(y), m.ons)
+            # the reverb arrival is defined on the reverb alone (the width layer blooms in the same window)
+            mm = Measure(render(a.renderer, dict(P, widthOn=False), dry, tmp)); mm.ons = list(m.ons); R["arrival"] = mm.wet_arrival_ms()
         else:
             R = None
 
     def r1(v): return None if v is None else round(float(v), 2)
     preset = {
-        "format": "SunoChainPreset", "version": 1,
+        "format": "SunoChainPreset", "version": 2,
         "name": a.name or os.path.splitext(os.path.basename(a.input))[0],
         "source_file": os.path.basename(a.input),
         "eq": {"target_curve_hz": CENTERS, "target_curve_db": [r1(v) for v in curve],
-               "amount": 1.0, "max_boost_db": 9.0, "max_cut_db": 24.0},
+               "amount": 1.0, "max_boost_db": 12.0, "max_cut_db": 24.0},
         "dynamics": {"target_crest_db": r1(dyn["crest_db"]), "target_spread400_db": r1(dyn["spread400_db"]), "default_total_gr_db": 6.0,
                      "comp1": {"ratio": 4.0, "attack_ms": 2.0, "release_ms": 50.0, "share": 0.55},
-                     "comp2": {"ratio": 4.0, "attack_ms": 30.0, "release_ms": 300.0}},
+                     "comp2": {"ratio": 4.0, "attack_ms": 30.0, "release_ms": 300.0}, "leveler_factor": 1.5},
         "deesser": {"freq_hz": 5500.0, "target_ratio_db": r1(deess_t), "max_db": 8.0},
         "saturation": {"drive_db": 6.0, "mix": 0.15, "measured": False},
-        "delay": {"on": bool(P["delayOn"]), "time_ms": r1(P["delayMs"]), "feedback": P["delayFeedback"],
-                  "level_db": P["delayLevelDb"], "hpf_hz": P["delayHpf"], "lpf_hz": P["delayLpf"], "ping_pong": True},
+        # delay: only applied on load when an echo was actually detected in the Suno vocal;
+        # otherwise the plugin keeps your own delay settings
+        "delay": {"detected": bool(P["delayOn"]), "on": bool(P["delayOn"]), "time_ms": r1(P["delayMs"]), "feedback": P["delayFeedback"],
+                  "level_db": P["delayLevelDb"], "hpf_hz": P["delayHpf"], "lpf_hz": P["delayLpf"], "ping_pong": True,
+                  "sync": True, "note": 2, "to_reverb": 0.5},
+        "width_layer": {"on": True, "level_db": r1(P["widthLevelDb"]), "delay_ms": r1(P["widthDelayMs"]), "shift_hz": round(float(P["widthShiftHz"]), 3),
+                        "tilt_db": r1(P["widthTiltDb"]), "hpf_hz": r1(P["widthHpf"]), "lpf_hz": r1(P["widthLpf"]),
+                        "bloom_db": r1(P["widthBloomDb"]), "bloom_ms": r1(P["widthBloomMs"]), "side_only": True},
         "reverb": {"on": True, "predelay_ms": r1(P["predelayMs"]), "rt60_s": r1(P["rt60"]),
                    "rt60_low_mul": r1(P["rt60LowMul"]), "rt60_high_mul": r1(P["rt60HighMul"]), "crossover_hz": 1500.0,
-                   "size": 1.0, "mod_depth": 0.5, "early_ms": 22.0, "early_level_db": -8.0,
+                   "size": 1.0, "mod_depth": P["modDepth"], "diffusion": P["diffusion"], "diffusion_size": P["diffusionSize"],
+                   "early_ms": 22.0, "early_level_db": -100.0,
                    "hpf_hz": r1(P["wetHpf"]), "lpf_hz": r1(P["wetLpf"]), "bump_hz": r1(P["wetBumpHz"]), "bump_db": r1(P["wetBumpDb"]),
                    "width": r1(P["width"]), "level_db": r1(P["reverbLevelDb"])},
         "ducking": {"depth_db": r1(P["duckDb"]), "attack_ms": 5.0, "release_ms": r1(P["duckReleaseMs"])},
@@ -352,19 +477,23 @@ def main():
                      "spread400_db": r1(dyn["spread400_db"]), "wet_arrival_ms": r1(T["arrival"]),
                      "wet_rise_after_vocal_db": r1(T["rise"]), "wet_peak_re_dry_db": r1(T["wet"]),
                      "side_minus_mid_in_gaps_db": r1(T["width"]), "gap_decay": T["decay"],
-                     "delay_detected": dly},
+                     "wet_rise_short_pauses_db": r1(T["rise_short"]), "wet_rise_long_pauses_db": r1(T["rise_long"]),
+                     "wet_peak_time_long_ms": r1(T["peak_long"]), "side_minus_mid_singing_db": r1(T["sing_width"]),
+                     "side_minus_mid_section_start_db": r1(T["early_side"]), "width_layer_coherence": T["coh"], "delay_detected": dly},
             "render_with_preset": None if R is None else {
                 "wet_arrival_ms": r1(R["arrival"]), "wet_rise_after_vocal_db": r1(R["rise"]),
                 "wet_peak_re_dry_db": r1(R["wet"]), "side_minus_mid_in_gaps_db": r1(R["width"]),
-                "gap_decay": R["decay"]},
+                "gap_decay": R["decay"], "wet_rise_short_pauses_db": r1(R["rise_short"]), "wet_rise_long_pauses_db": r1(R["rise_long"]),
+                "wet_peak_time_long_ms": r1(R["peak_long"]), "side_minus_mid_singing_db": r1(R["sing_width"]),
+                "side_minus_mid_section_start_db": r1(R["early_side"]), "width_layer_coherence": R["coh"]},
             "wet_curve_suno_db": None if T["curve"] is None else [r1(v) for v in T["curve"]],
             "wet_curve_render_db": None if R is None or R["curve"] is None else [r1(v) for v in R["curve"]],
             "fit_history": hist,
         },
     }
     with open(a.out, "w") as fh: json.dump(preset, fh, indent=2)
-    log(json.dumps(preset["reverb"], indent=1)); log(json.dumps(preset["ducking"]))
-    log(json.dumps(preset["measurements"]["suno"], indent=1)); log(json.dumps(preset["measurements"]["render_with_preset"], indent=1))
+    log(json.dumps(preset["reverb"])); log(json.dumps(preset["ducking"])); log(json.dumps(preset["width_layer"]))
+    log("SUNO  ", json.dumps(preset["measurements"]["suno"])); log("RENDER", json.dumps(preset["measurements"]["render_with_preset"]))
 
 
 if __name__ == "__main__":

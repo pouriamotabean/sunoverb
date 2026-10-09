@@ -30,9 +30,14 @@ int main (int argc, char** argv)
     B ("delayOn", p.delayOn); F ("delayMs", p.delayMs); F ("delayFeedback", p.delayFeedback); F ("delayLevelDb", p.delayLevelDb);
     F ("delayHpf", p.delayHpf); F ("delayLpf", p.delayLpf); B ("delayPingPong", p.delayPingPong);
     B ("reverbOn", p.reverbOn); F ("predelayMs", p.predelayMs); F ("rt60", p.rt60); F ("rt60LowMul", p.rt60LowMul);
-    F ("rt60HighMul", p.rt60HighMul); F ("crossoverHz", p.crossoverHz); F ("size", p.size); F ("modDepth", p.modDepth);
+    F ("rt60HighMul", p.rt60HighMul); F ("crossoverHz", p.crossoverHz); F ("size", p.size); F ("modDepth", p.modDepth); F ("diffusion", p.diffusion); F ("diffusionSize", p.diffusionSize);
     F ("earlyMs", p.earlyMs); F ("earlyLevelDb", p.earlyLevelDb); F ("wetHpf", p.wetHpf); F ("wetLpf", p.wetLpf);
     F ("wetBumpHz", p.wetBumpHz); F ("wetBumpDb", p.wetBumpDb); F ("width", p.width); F ("reverbLevelDb", p.reverbLevelDb);
+    F ("levelerFactor", p.levelerFactor); F ("bpm", p.bpm); F ("delayToReverb", p.delayToReverb); B ("delaySync", p.delaySync);
+    if (kv.count ("delayNote")) p.delayNote = (int) std::stof (kv["delayNote"]);
+    B ("widthOn", p.widthOn); F ("widthLevelDb", p.widthLevelDb); F ("widthDelayMs", p.widthDelayMs); F ("widthShiftHz", p.widthShiftHz);
+    F ("widthTiltDb", p.widthTiltDb); F ("widthHpf", p.widthHpf); F ("widthLpf", p.widthLpf); F ("widthBloomDb", p.widthBloomDb);
+    F ("widthBloomMs", p.widthBloomMs); F ("widthMotion", p.widthMotion); B ("autoGainStage", p.autoGainStage);
     F ("duckDb", p.duckDb); F ("duckAttackMs", p.duckAttackMs); F ("duckReleaseMs", p.duckReleaseMs);
     if (kv.count ("targetCurve")) { auto v = parseList (kv["targetCurve"]); for (int i = 0; i < sc::kNumBands && i < (int) v.size(); ++i) p.targetCurve[i] = v[i]; p.hasTarget = true; }
 
@@ -69,6 +74,13 @@ int main (int argc, char** argv)
         chain.process (L.data() + i, R.data() + i, m);
     }
     for (size_t i = 0; i < n; ++i) { x[2 * i] = L[i]; x[2 * i + 1] = R[i]; }
+    // compensate the plugin latency so output aligns with input (like a DAW would)
+    {
+        int lat = chain.getLatency();
+        std::vector<float> L2 (n, 0.0f), R2 (n, 0.0f);
+        for (size_t i = 0; i + (size_t) lat < n; ++i) { L2[i] = L[i + (size_t) lat]; R2[i] = R[i + (size_t) lat]; }
+        for (size_t i = 0; i < n; ++i) { x[2 * i] = L2[i]; x[2 * i + 1] = R2[i]; }
+    }
     std::ofstream out (argv[3], std::ios::binary); out.write ((const char*) x.data(), (std::streamsize) (x.size() * 4));
     return 0;
 }
