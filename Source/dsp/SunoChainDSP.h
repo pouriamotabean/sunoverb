@@ -52,8 +52,9 @@ struct Params
     float levelerFactor = 1.5f;     // calibration: nominal ratio needed per unit of spread excess (tested on real vocals)
     float compAmount = 1.0f;
 
-    // de-esser (ratio based: acts when HF/full ratio exceeds the Suno target)
-    float deessFreq = 5500.0f, deessTargetDb = -14.0f, deessMaxDb = 8.0f, deessAmount = 1.0f;
+    // sibilance balancer (v1.2): level of "s"/"z" relative to the vowel around them, as in the Suno vocal
+    // deessTargetDb = Suno's median sibilant-over-vowel minus 3.5 dB (calibration: detector vs measurement), ratio 6
+    float deessFreq = 4000.0f, deessTargetDb = -6.0f, deessRatio = 6.0f, deessMaxDb = 20.0f, deessAmount = 1.0f;
 
     // saturation (not measurable from stems: preset default)
     float satDriveDb = 6.0f, satMix = 0.15f;
@@ -125,6 +126,13 @@ struct Biquad
         f = std::min (f, fs * 0.45);
         double w = 2 * kPi * f / fs, al = std::sin (w) / (2 * q), c = std::cos (w);
         setNorm ((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + al, -2 * c, 1 - al);
+    }
+    void setHighShelf (double fs, double f, double db, double q = 0.7071)
+    {
+        f = std::min (f, fs * 0.45);
+        double A = std::pow (10.0, db / 40.0), w = 2 * kPi * f / fs, c = std::cos (w), sn = std::sin (w), al = sn / (2 * q), sq = 2 * std::sqrt (A) * al;
+        setNorm (A * ((A + 1) + (A - 1) * c + sq), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - sq),
+                 (A + 1) - (A - 1) * c + sq, 2 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - sq);
     }
     double magDb (double fs, double f) const
     {
@@ -226,14 +234,22 @@ struct Compressor
 //==============================================================================
 struct DeEsser
 {
-    Biquad hp;
-    float envHf = 0, envFull = 0, envCoef = 0, red = 0, atk = 0, rel = 0;
-    float targetDb = -14, maxDb = 8, amount = 1;
-    void setFreq (double fs, float freq) { hp.setHPF (fs, freq); }
+    // "Sibilance balancer" (v1.2). The Match EQ has to lift the highs a lot when the vowels are darker than
+    // Suno's, and a static EQ lifts "s"/"z" by the same amount. This keeps the level of sibilant moments
+    // relative to the vowel around them at the Suno balance: above sibTargetDb (dB over the vowel level)
+    // the high band is pulled down with sibRatio. Works on the band above `freq` (4 kHz by default, so "z"
+    // is covered too), detection is level independent.
+    Biquad hp, shelf; double sfs = 48000; float shelfFreq = 4000, shelfDb = 0;
+    float envHf = 0, envFull = 0, envCoef = 0, cut = 0, atk = 0, rel = 0;
+    float vowelRef = -60, vowAtk = 0, vowRel = 0, holdDecay = 0;
+    float targetDb = -2.5f, ratio = 3.0f, maxDb = 20.0f, amount = 1.0f;
+    int counter = 0; float curCutTarget = 0;
+    void setFreq (double fs, float freq) { hp.setHPF (fs, freq); sfs = fs; shelfFreq = freq; shelf.setHighShelf (fs, freq, -shelfDb); }
     void prepare (double fs, float freq)
     {
-        hp.reset(); hp.setHPF (fs, freq);
-        envCoef = msToCoef (5.0f, fs); atk = msToCoef (1.0f, fs); rel = msToCoef (60.0f, fs);
+        hp.reset(); hp.setHPF (fs, freq); sfs = fs; shelfFreq = freq; shelf.reset(); shelfDb = 0; shelf.setIdentity();
+        envCoef = msToCoef (5.0f, fs); atk = msToCoef (1.5f, fs); rel = msToCoef (40.0f, fs);
+        vowAtk = msToCoef (30.0f, fs); vowRel = msToCoef (200.0f, fs); holdDecay = (float) (3.0 / fs);   // 3 dB/s while holding
     }
     inline void process (float& l, float& r)
     {
@@ -241,16 +257,43 @@ struct DeEsser
         float hf = 0.5f * (hl * hl + hr * hr), full = 0.5f * (l * l + r * r);
         envHf = envCoef * envHf + (1 - envCoef) * hf;
         envFull = envCoef * envFull + (1 - envCoef) * full;
-        float target = 0;
-        if (envFull > 1e-7f)
+        if ((++counter & 15) == 0)   // decisions every 16 samples, gain smoothing per sample
         {
-            float ratioDb = 10 * std::log10 ((envHf + 1e-12f) / envFull);
-            target = std::clamp ((ratioDb - targetDb) * amount, 0.0f, maxDb);
+            const float fullDb = 10 * std::log10 (envFull + 1e-12f);
+            const float share = std::clamp ((envHf + 1e-12f) / (envFull + 1e-12f), 1e-4f, 1.0f);
+            const float ratioDb = 10 * std::log10 (share);
+            const bool voiced = fullDb > -60.0f;
+            // vowel reference: follows the level while the sound is not sibilant, holds (slowly decaying) through sibilants
+            if (voiced && ratioDb < -12.0f)
+            {
+                const float c = fullDb > vowelRef ? vowAtk : vowRel;
+                const float c16 = std::pow (c, 16.0f);
+                vowelRef = c16 * vowelRef + (1 - c16) * fullDb;
+            }
+            else vowelRef -= holdDecay * 16;
+            float target = 0;
+            const float w = std::clamp ((ratioDb + 12.0f) / 6.0f, 0.0f, 1.0f);   // 0 at -12 dB HF share, 1 at -6 dB
+            const float excess = fullDb - vowelRef - targetDb;
+            if (voiced && w > 0 && excess > 0 && amount > 0)
+            {
+                const float wantDb = std::min (excess * (1 - 1 / ratio) * w * amount, 30.0f);   // full-band reduction wanted
+                // HF gain a that lowers the full band by wantDb: (1-share) + share*a^2 = 10^(-want/10)
+                const float t = std::pow (10.0f, -wantDb / 10.0f) - (1 - share);
+                const float a2 = t > 1e-6f ? t / share : 1e-6f;
+                target = std::min (maxDb, -10 * std::log10 (std::min (1.0f, a2)));
+            }
+            curCutTarget = target;
         }
-        red = target > red ? atk * red + (1 - atk) * target : rel * red + (1 - rel) * target;
-        float k = 1 - dbToGain (-red);
-        l -= k * hl; r -= k * hr;
+        cut = curCutTarget > cut ? atk * cut + (1 - atk) * curCutTarget : rel * cut + (1 - rel) * curCutTarget;
+        // dynamic high shelf (clean: no band-split phase sums). Coefficients refreshed when the gain moves.
+        if (std::abs (cut - shelfDb) > 0.05f || ((counter & 15) == 0 && cut != shelfDb))
+        {
+            shelfDb = cut;
+            if (shelfDb < 0.01f) shelf.setIdentity(); else shelf.setHighShelf (sfs, shelfFreq, -shelfDb);
+        }
+        l = shelf.process (l, 0); r = shelf.process (r, 1);
     }
+    float currentCut() const { return cut; }
 };
 
 //==============================================================================
@@ -344,18 +387,12 @@ struct MicroWidth
     void set (const Params& p, float amt)
     {
         hp.setHPF (fs, p.widthHpf, 0.7071); lp.setLPF (fs, p.widthLpf, 0.7071);
-        setHighShelf (tilt, fs, 2500.0, p.widthTiltDb);
+        tilt.setHighShelf (fs, 2500.0, p.widthTiltDb);
         incA = p.widthShiftHz / fs; incB = p.widthShiftHz * 1.37 / fs;
         dA = (float) (p.widthDelayMs * 0.001 * fs); dB = (float) (p.widthDelayMs * 1.6 * 0.001 * fs);
         gain = (p.widthOn && amt > 0) ? dbToGain (p.widthLevelDb) * amt * 1.41421356f : 0.0f;   // two voices -> side
         bloomFloor = dbToGain (-std::max (0.0f, p.widthBloomDb)); bloomSamples = (float) (std::max (1.0f, p.widthBloomMs) * 0.001 * fs);
         motion = std::clamp (p.widthMotion, 0.0f, 1.0f);
-    }
-    static void setHighShelf (Biquad& b, double fs, double f, double db)
-    {
-        double A = std::pow (10.0, db / 40.0), w = 2 * kPi * f / fs, c = std::cos (w), sn = std::sin (w), al = sn / 2 * std::sqrt (2.0), sq = 2 * std::sqrt (A) * al;
-        b.setNorm (A * ((A + 1) + (A - 1) * c + sq), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - sq),
-                   (A + 1) - (A - 1) * c + sq, 2 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - sq);
     }
     // returns the side signal to add (L += s, R -= s)
     inline float process (float mono)
@@ -658,7 +695,8 @@ public:
     float eqMakeup = 1.0f;
     bool eqValid = false;
     // meters (written by the audio thread, read by the editor)
-    std::atomic<float> mGr1 { 0 }, mGr2 { 0 }, mDuck { 0 }, mIn { -100 }, mOut { -100 }, mWidth { -100 }, mDelayMs { 0 };
+    std::atomic<float> mGr1 { 0 }, mGr2 { 0 }, mDuck { 0 }, mIn { -100 }, mOut { -100 }, mWidth { -100 }, mDelayMs { 0 }, mDeess { 0 };
+    std::atomic<uint32_t> mBlocks { 0 };   // lets the editor see when the host stopped calling us
 
     void prepare (double sampleRate)
     {
@@ -721,7 +759,7 @@ public:
             eqMakeup = (float) std::sqrt (a / std::max (b, 1e-12));
         }
         deess.setFreq (fs, p.deessFreq);
-        deess.targetDb = p.deessTargetDb; deess.maxDb = p.deessMaxDb; deess.amount = p.deessAmount * amt;
+        deess.targetDb = p.deessTargetDb; deess.ratio = std::max (1.01f, p.deessRatio); deess.maxDb = p.deessMaxDb; deess.amount = p.deessAmount * amt;
         satDrive = dbToGain (p.satDriveDb); satMix = p.satMix * amt;
 
         delay.set (p.delayHpf, p.delayLpf);
@@ -747,7 +785,7 @@ public:
         const float duckDepth = p.duckDb * std::clamp (p.amount, 0.0f, 1.0f);
         const float presenceFloor = -18.0f - 15.0f;
         const float dlyMs = currentDelayMs();
-        float maxGr1 = 0, maxGr2 = 0, maxDuck = 0, pkIn = 0, pkOut = 0, wE = 0, dE = 0;
+        float maxGr1 = 0, maxGr2 = 0, maxDuck = 0, pkIn = 0, pkOut = 0, wE = 0, dE = 0, maxDs = 0;
         for (int i = 0; i < n; ++i)
         {
             float l = L[i], r = R ? R[i] : L[i];
@@ -766,6 +804,7 @@ public:
             laL.push (l); laR.push (r);
             l = laL.read (lookahead - 1) * g1 * g2; r = laR.read (lookahead - 1) * g1 * g2;
             deess.process (l, r);
+            maxDs = std::max (maxDs, deess.currentCut());
             if (satMix > 0)
             {
                 float sl = std::tanh (l * satDrive) / satDrive, sr = std::tanh (r * satDrive) / satDrive;
@@ -802,7 +841,8 @@ public:
             if (R) R[i] = r * outGain;
             pkOut = std::max (pkOut, std::max (std::abs (L[i]), R ? std::abs (R[i]) : 0.0f));
         }
-        mDelayMs = dlyMs;
+        mDelayMs = dlyMs; mDeess = maxDs;
+        mBlocks = mBlocks.load() + 1;
         mGr1 = maxGr1; mGr2 = maxGr2; mDuck = maxDuck; mIn = gainToDb (pkIn); mOut = gainToDb (pkOut);
         mWidth = dE > 1e-9f ? 10 * std::log10 (wE / dE + 1e-12f) : -100.0f;
     }

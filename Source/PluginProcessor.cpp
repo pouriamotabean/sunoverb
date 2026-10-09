@@ -70,7 +70,12 @@ bool curveFromString (const juce::String& str, std::array<float, sc::kNumBands>&
 juce::AudioParameterFloatAttributes fmt (int decimals, const juce::String& unit)
 {
     return juce::AudioParameterFloatAttributes().withLabel (unit).withStringFromValueFunction (
-        [decimals, unit] (float v, int) { return juce::String (v, decimals) + (unit.isEmpty() ? "" : " " + unit); });
+        [decimals, unit] (float v, int)
+        {
+            // note: juce::String (v, 0) would print *all* decimals, so whole numbers are rounded explicitly
+            auto t = decimals == 0 ? juce::String (juce::roundToInt (v)) : juce::String (v, decimals);
+            return t + (unit.isEmpty() ? "" : " " + unit);
+        });
 }
 juce::AudioParameterFloatAttributes fmtHz()
 {
@@ -304,8 +309,9 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         put (j, "dynamics.target_crest_db", hidden.targetCrestDb);
         put (j, "dynamics.target_spread400_db", hidden.targetSpreadDb);
         put (j, "dynamics.leveler_factor", hidden.levelerFactor);
-        put (j, "deesser.freq_hz", hidden.deessFreq);
-        put (j, "deesser.target_ratio_db", hidden.deessTargetDb);
+        put (j, "deesser.split_hz", hidden.deessFreq);
+        put (j, "deesser.sib_median_db", hidden.deessTargetDb + 3.5f);
+        put (j, "deesser.ratio", hidden.deessRatio);
         put (j, "reverb.rt60_high_mul", hidden.rt60HighMul);
         put (j, "reverb.bump_hz", hidden.wetBumpHz);
         put (j, "reverb.bump_db", hidden.wetBumpDb);
@@ -381,9 +387,11 @@ void SunoChainProcessor::restorePresetFromTree()
     hidden.comp2Ratio     = (float) num (j, "dynamics.comp2.ratio", 4.0);
     hidden.comp2AttackMs  = (float) num (j, "dynamics.comp2.attack_ms", 30.0);
     hidden.comp2ReleaseMs = (float) num (j, "dynamics.comp2.release_ms", 300.0);
-    hidden.deessFreq      = (float) num (j, "deesser.freq_hz", 5500.0);
-    hidden.deessTargetDb  = (float) num (j, "deesser.target_ratio_db", -13.5);
-    hidden.deessMaxDb     = (float) num (j, "deesser.max_db", 8.0);
+    // v1.2 sibilance balancer: threshold from Suno's sibilant-over-vowel median (older presets: Suno Lead 01 value)
+    hidden.deessFreq      = (float) num (j, "deesser.split_hz", 4000.0);
+    hidden.deessTargetDb  = (float) (num (j, "deesser.sib_median_db", -2.5) - 3.5);
+    hidden.deessRatio     = (float) num (j, "deesser.ratio", 6.0);
+    hidden.deessMaxDb     = (float) num (j, "deesser.max_cut_db", 20.0);
     hidden.delayHpf       = (float) num (j, "delay.hpf_hz", 300.0);
     hidden.delayLpf       = (float) num (j, "delay.lpf_hz", 5000.0);
     hidden.delayPingPong  = num (j, "delay.ping_pong", 1.0) > 0.5;
@@ -466,7 +474,7 @@ SunoChainProcessor::CurveSnapshot SunoChainProcessor::getCurves() const
 SunoChainProcessor::Meters SunoChainProcessor::getMeters() const
 {
     return { chain.mGr1.load(), chain.mGr2.load(), chain.mDuck.load(), chain.mIn.load(), chain.mOut.load(), chain.mWidth.load(),
-             hostBpm.load(), chain.mDelayMs.load() };
+             hostBpm.load(), chain.mDelayMs.load(), chain.mBlocks.load(), chain.mDeess.load() };
 }
 
 //==============================================================================

@@ -129,10 +129,22 @@ void CurveGraph::paint (juce::Graphics& g)
 //==============================================================================
 void MeterPanel::update (const SunoChainProcessor::Meters& m)
 {
-    auto fall = [] (float& cur, float v, float rate) { cur = v > cur ? v : cur - rate; };
-    fall (in, m.in, 1.5f); fall (out, m.out, 1.5f);
-    fall (gr1, m.gr1, 0.4f); fall (gr2, m.gr2, 0.4f); fall (duck, m.duck, 0.6f);
-    width = m.width > -99 ? (width < -99 ? m.width : 0.8f * width + 0.2f * m.width) : width - 1.0f;
+    // no new audio blocks for ~150 ms (transport stopped / plugin suspended) -> treat as silence
+    idleTicks = m.blocks == lastBlocks ? idleTicks + 1 : 0;
+    lastBlocks = m.blocks;
+    const bool idle = idleTicks > 3;
+    // the compressors deliberately hold their gain through pauses; with no singing that held value is
+    // meaningless to look at, so the gain-reduction meters show zero when there is no input
+    const bool silent = idle || m.in < -70.0f;
+    auto fall = [] (float& cur, float v, float rate, float floor) { cur = std::max (v, std::max (floor, cur - rate)); };
+    fall (in,  idle ? -100.0f : m.in,  1.5f, -100.0f);
+    fall (out, idle ? -100.0f : m.out, 1.5f, -100.0f);
+    fall (gr1,  silent ? 0.0f : m.gr1,  0.4f, 0.0f);
+    fall (gr2,  silent ? 0.0f : m.gr2,  0.4f, 0.0f);
+    fall (duck, silent ? 0.0f : m.duck, 0.6f, 0.0f);
+    fall (ds,   silent ? 0.0f : m.deess, 0.8f, 0.0f);
+    if (silent || m.width < -99) width = std::max (-100.0f, width - 1.5f);
+    else width = width < -99 ? m.width : 0.8f * width + 0.2f * m.width;
     repaint();
 }
 
@@ -143,7 +155,7 @@ void MeterPanel::paint (juce::Graphics& g)
     g.setColour (col::dim); g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
     g.drawText ("METERS", r.removeFromTop (22).withTrimmedLeft (12), juce::Justification::centredLeft);
     auto area = r.reduced (8, 4);
-    const int n = 6; const float w = area.getWidth() / n;
+    const int n = 7; const float w = area.getWidth() / n;
     auto bar = [&] (int i, const juce::String& name, float v, float lo, float hi, bool down, juce::Colour c, const juce::String& val)
     {
         auto b = juce::Rectangle<float> (area.getX() + i * w, area.getY(), w, area.getHeight());
@@ -151,19 +163,24 @@ void MeterPanel::paint (juce::Graphics& g)
         auto track = b.reduced (w * 0.28f, 2);
         g.setColour (col::edge); g.fillRoundedRectangle (track, 3);
         float t = juce::jlimit (0.0f, 1.0f, (v - lo) / (hi - lo));
-        auto fill = down ? track.withHeight (track.getHeight() * t) : track.withTrimmedTop (track.getHeight() * (1 - t));
-        g.setColour (c); g.fillRoundedRectangle (fill, 3);
+        if (t > 0.01f)
+        {
+            auto fill = down ? track.withHeight (track.getHeight() * t) : track.withTrimmedTop (track.getHeight() * (1 - t));
+            g.setColour (c); g.fillRoundedRectangle (fill, std::min (3.0f, fill.getHeight() * 0.5f));
+        }
         g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
         g.drawText (name, lab.removeFromTop (13), juce::Justification::centred);
         g.setColour (col::text); g.drawText (val, lab, juce::Justification::centred);
     };
     auto dbs = [] (float v) { return v < -99 ? juce::String ("-inf") : juce::String (v, 1); };
+    auto grs = [] (float v) { return v < 0.05f ? juce::String ("0.0") : juce::String (v, 1); };
     bar (0, "IN", in, -60, 0, false, col::blue, dbs (in));
     bar (1, "OUT", out, -60, 0, false, col::blue, dbs (out));
-    bar (2, "COMP", gr1, 0, 12, true, col::accent, juce::String (gr1, 1));
-    bar (3, "LEVEL", gr2, 0, 12, true, col::accent, juce::String (gr2, 1));
-    bar (4, "DUCK", duck, 0, 24, true, col::green, juce::String (duck, 1));
-    bar (5, "WIDTH", width, -50, -10, false, col::violet, dbs (width));
+    bar (2, "COMP", gr1, 0, 12, true, col::accent, grs (gr1));
+    bar (3, "LEVEL", gr2, 0, 12, true, col::accent, grs (gr2));
+    bar (4, "S / Z", ds, 0, 20, true, col::accent, grs (ds));
+    bar (5, "DUCK", duck, 0, 24, true, col::green, grs (duck));
+    bar (6, "WIDTH", width, -50, -10, false, col::violet, dbs (width));
 }
 
 //==============================================================================
@@ -305,7 +322,7 @@ void SunoChainEditor::paint (juce::Graphics& g)
     g.setColour (col::text); g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
     g.drawText ("SUNO CHAIN", 20, 12, 170, 28, juce::Justification::centredLeft);
     g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-    g.drawText ("v1.1", 160, 20, 40, 14, juce::Justification::centredLeft);
+    g.drawText ("v1.2", 160, 20, 40, 14, juce::Justification::centredLeft);
     auto section = [&] (juce::Rectangle<int> r, const juce::String& title)
     {
         g.setColour (col::panel); g.fillRoundedRectangle (r.toFloat(), 8);
@@ -337,8 +354,8 @@ void SunoChainEditor::resized()
     graph.setBounds (20, 64, 640, 244);
     meters.setBounds (670, 64, 270, 244);
 
-    place ("amount", 995, 90, 80);
-    place ("output", 995, 196, 64);
+    place ("amount", 1001, 86, 68);
+    place ("output", 1009, 206, 52);
 
     const int s = 58;
     // tone & dynamics

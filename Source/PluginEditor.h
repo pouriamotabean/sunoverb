@@ -27,7 +27,8 @@ public:
     void update (const SunoChainProcessor::Meters& m);
     void paint (juce::Graphics&) override;
 private:
-    float in = -100, out = -100, gr1 = 0, gr2 = 0, duck = 0, width = -100;
+    float in = -100, out = -100, gr1 = 0, gr2 = 0, duck = 0, width = -100, ds = 0;
+    uint32_t lastBlocks = 0; int idleTicks = 0;
 };
 
 class SunoChainEditor : public juce::AudioProcessorEditor, private juce::Timer

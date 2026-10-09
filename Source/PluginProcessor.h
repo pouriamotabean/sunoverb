@@ -60,7 +60,7 @@ public:
         float sourceLevel = 0, sourceCrest = 0, targetCrest = 0;
     };
     CurveSnapshot getCurves() const;
-    struct Meters { float gr1, gr2, duck, in, out, width; double bpm; float delayMs; };
+    struct Meters { float gr1, gr2, duck, in, out, width; double bpm; float delayMs; uint32_t blocks; float deess; };
     Meters getMeters() const;
 
 private:
