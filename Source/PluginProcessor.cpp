@@ -5,9 +5,9 @@ namespace
 {
 using APF = juce::AudioParameterFloat;
 using APB = juce::AudioParameterBool;
-using Range = juce::NormalisableRange<float>;
+using NRange = juce::NormalisableRange<float>;
 
-Range skewed (float lo, float hi, float centre) { Range r (lo, hi); r.setSkewForCentre (centre); return r; }
+NRange skewed (float lo, float hi, float centre) { NRange r (lo, hi); r.setSkewForCentre (centre); return r; }
 
 // read a number at a dotted path inside the preset json
 double num (const juce::var& root, const char* path, double def)
@@ -49,30 +49,30 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     auto hz  = juce::AudioParameterFloatAttributes().withLabel ("Hz");
     auto sec = juce::AudioParameterFloatAttributes().withLabel ("s");
 
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "amount", 1 }, "Amount", Range (0, 100), 100.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "output", 1 }, "Output", Range (-24, 12), 0.0f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "amount", 1 }, "Amount", NRange (0, 100), 100.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "output", 1 }, "Output", NRange (-24, 12), 0.0f, dB));
 
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "eqAmount", 1 }, "Match EQ", Range (0, 150), 100.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "eqLow", 1 }, "EQ Low Match", Range (0, 100), 35.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "compAmount", 1 }, "Compression", Range (0, 200), 100.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "deess", 1 }, "De-ess", Range (0, 200), 100.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "satDrive", 1 }, "Sat Drive", Range (0, 24), 6.0f, dB));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "satMix", 1 }, "Sat Mix", Range (0, 100), 15.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "eqAmount", 1 }, "Match EQ", NRange (0, 150), 100.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "eqLow", 1 }, "EQ Low Match", NRange (0, 100), 35.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "compAmount", 1 }, "Compression", NRange (0, 200), 100.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "deess", 1 }, "De-ess", NRange (0, 200), 100.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "satDrive", 1 }, "Sat Drive", NRange (0, 24), 6.0f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "satMix", 1 }, "Sat Mix", NRange (0, 100), 15.0f, pct));
 
     p.push_back (std::make_unique<APB> (juce::ParameterID { "revOn", 1 }, "Reverb On", true));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "revLevel", 1 }, "Reverb Level", Range (-40, 6), -10.0f, dB));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "predelay", 1 }, "Pre-delay", Range (0, 500), 180.0f, ms));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "revLevel", 1 }, "Reverb Level", NRange (-40, 6), -10.0f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "predelay", 1 }, "Pre-delay", NRange (0, 500), 180.0f, ms));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "decay", 1 }, "Decay", skewed (0.3f, 10.0f, 2.5f), 3.0f, sec));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "width", 1 }, "Width", Range (0, 160), 100.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "duck", 1 }, "Ducking", Range (0, 24), 7.0f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "width", 1 }, "Width", NRange (0, 160), 100.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "duck", 1 }, "Ducking", NRange (0, 24), 7.0f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "duckRel", 1 }, "Duck Release", skewed (10, 1000, 150), 120.0f, ms));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "wetHpf", 1 }, "Reverb HPF", skewed (20, 2000, 250), 300.0f, hz));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "wetLpf", 1 }, "Reverb LPF", skewed (1000, 20000, 5000), 5000.0f, hz));
 
     p.push_back (std::make_unique<APB> (juce::ParameterID { "dlyOn", 1 }, "Delay On", false));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "dlyLevel", 1 }, "Delay Level", Range (-40, 0), -18.0f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "dlyLevel", 1 }, "Delay Level", NRange (-40, 0), -18.0f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "dlyTime", 1 }, "Delay Time", skewed (20, 2000, 300), 375.0f, ms));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "dlyFb", 1 }, "Delay Feedback", Range (0, 95), 25.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "dlyFb", 1 }, "Delay Feedback", NRange (0, 95), 25.0f, pct));
     return { p.begin(), p.end() };
 }
 
