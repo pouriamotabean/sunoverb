@@ -35,10 +35,11 @@ struct Params
     bool  autoGainStage = true;     // normalise singing level to -18 dBFS internally (needs Learn)
 
     // match EQ: target curve comes from the preset, source curve from Learn
-    std::array<float, kNumBands> targetCurve {};   // dB, normalised (mean of 250..4k bands = 0)
+    // dB, normalised (mean of 250..4k bands = 0). Default = built-in "Suno Lead 01" so the plugin works without a preset file.
+    std::array<float, kNumBands> targetCurve { -9.5f, -12.15f, -3.46f, -5.82f, -5.68f, 1.45f, 2.05f, 10.47f, 8.17f, 2.0f, 4.1f, 6.42f, 5.04f, 1.04f, 1.17f, -1.92f, -6.03f, -7.82f, -9.97f, -12.68f, -20.1f, -16.94f, -19.72f, -16.91f, -21.3f, -32.19f };
     std::array<float, kNumBands> sourceCurve {};   // dB, from Learn
-    bool  hasTarget = false, hasSource = false;
-    float eqAmount = 1.0f, eqMaxBoostDb = 9.0f, eqMaxCutDb = 24.0f, eqLowWeight = 0.35f;
+    bool  hasTarget = true, hasSource = false;
+    float eqAmount = 1.0f, eqMaxBoostDb = 12.0f, eqMaxCutDb = 24.0f, eqLowWeight = 0.35f;
 
     // dynamics
     float compTotalGrDb = 6.0f;     // planned total gain reduction on typical loud syllables
@@ -48,6 +49,7 @@ struct Params
     float sourceSpreadDb = 0.0f;    // from Learn (0 = unknown)
     float comp1Ratio = 4.0f, comp1AttackMs = 2.0f, comp1ReleaseMs = 50.0f, comp1Share = 0.55f;
     float comp2Ratio = 3.0f, comp2AttackMs = 30.0f, comp2ReleaseMs = 300.0f;   // ratio = max ratio for the leveler
+    float levelerFactor = 1.5f;     // calibration: nominal ratio needed per unit of spread excess (tested on real vocals)
     float compAmount = 1.0f;
 
     // de-esser (ratio based: acts when HF/full ratio exceeds the Suno target)
@@ -56,16 +58,28 @@ struct Params
     // saturation (not measurable from stems: preset default)
     float satDriveDb = 6.0f, satMix = 0.15f;
 
-    // delay
+    // delay (tempo-synced by default; feeds the reverb as well)
     bool  delayOn = false;
     float delayMs = 375.0f, delayFeedback = 0.25f, delayLevelDb = -18.0f, delayHpf = 300.0f, delayLpf = 5000.0f;
     bool  delayPingPong = true;
+    bool  delaySync = true;
+    int   delayNote = 2;                // 0 = 1/4, 1 = 1/8 dotted, 2 = 1/8, 3 = 1/8 triplet, 4 = 1/16
+    float delayToReverb = 0.5f;         // 0..1: how much of the echo is sent into the reverb
+    float bpm = 120.0f;                 // from the host
+
+    // vocal width layer (side-only, mono-safe): two slowly modulated short delays, L/R opposite
+    bool  widthOn = true;
+    float widthLevelDb = -27.0f;        // layer level relative to the dry vocal
+    float widthDelayMs = 1.0f, widthShiftHz = 1.0f, widthTiltDb = 0.0f;
+    float widthHpf = 200.0f, widthLpf = 16000.0f;
+    float widthBloomDb = 12.0f, widthBloomMs = 200.0f;   // layer starts lower at phrase starts (measured in Suno)
+    float widthMotion = 0.0f;           // 0 = constant (Suno), 1 = only on held notes
 
     // reverb
     bool  reverbOn = true;
     float predelayMs = 180.0f, rt60 = 3.0f, rt60LowMul = 1.0f, rt60HighMul = 0.75f, crossoverHz = 1500.0f;
-    float size = 1.0f, modDepth = 0.5f;
-    float earlyMs = 22.0f, earlyLevelDb = -8.0f;
+    float size = 1.0f, modDepth = 2.5f, diffusion = 0.75f, diffusionSize = 2.0f;
+    float earlyMs = 22.0f, earlyLevelDb = -100.0f;   // discrete early taps off: Suno's reverb has no slap
     float wetHpf = 300.0f, wetLpf = 5000.0f, wetBumpHz = 2500.0f, wetBumpDb = 2.0f;
     float width = 1.0f;
     float reverbLevelDb = -10.0f;   // un-ducked wet level relative to the dry vocal (stationary signal)
@@ -177,10 +191,13 @@ inline std::array<float, kNumBands> computeCorrection (const Params& p)
         float s = raw[i] * 2.0f, w = 2.0f;
         if (i > 0) { s += raw[i - 1]; w += 1; }
         if (i < kNumBands - 1) { s += raw[i + 1]; w += 1; }
-        // below ~300 Hz the target mostly reflects the Suno singer's pitch range, not processing:
-        // match it only partially there
-        const float lowW = bandCenters()[i] < 300.0f ? p.eqLowWeight : 1.0f;
-        float v = s / w * p.eqAmount * p.amount * lowW;
+        // Low end: the Suno target there mostly reflects the Suno singer's pitch range and stem bleed.
+        //  < 120 Hz : cuts only, never boost (boosting would only add rumble / mud)
+        //  120-300  : cuts in full, boosts scaled by "Low Match"
+        float v = s / w * p.eqAmount * p.amount;
+        const float fc = bandCenters()[i];
+        if (fc < 120.0f)      v = std::min (v, 0.0f);
+        else if (fc < 300.0f) v = v > 0.0f ? v * p.eqLowWeight : v;
         d[i] = std::clamp (v, -p.eqMaxCutDb, p.eqMaxBoostDb);
     }
     return d;
@@ -193,8 +210,10 @@ struct Compressor
     void set (double fs, float thresholdDb, float r, float attackMs, float releaseMs, float makeupDb)
     { thrDb = thresholdDb; ratio = std::max (1.0f, r); atk = msToCoef (attackMs, fs); rel = msToCoef (releaseMs, fs); makeup = dbToGain (makeupDb); }
     void reset() { gr = 0; }
-    inline float computeGain (float detector)
+    // hold = true freezes the gain reduction (used during pauses so the next phrase starts at the same level)
+    inline float computeGain (float detector, bool hold = false)
     {
+        if (hold) return dbToGain (-gr) * makeup;
         float lv = gainToDb (detector), over = lv - thrDb, target;
         if (2 * over < -knee) target = 0;
         else if (2 * std::abs (over) <= knee) { float t = over + knee / 2; target = (1 - 1 / ratio) * t * t / (2 * knee); }
@@ -253,17 +272,122 @@ struct DelayLine
 //==============================================================================
 struct StereoDelay
 {
-    DelayLine l, r; Biquad hp, lp; float fbL = 0, fbR = 0; double fs = 48000;
-    void prepare (double s) { fs = s; l.allocate ((int) (2.1 * fs)); r.allocate ((int) (2.1 * fs)); hp.reset(); lp.reset(); fbL = fbR = 0; }
+    DelayLine l, r; Biquad hp, lp; double fs = 48000; float dSmooth = -1.0f, dCoef = 0.0f;
+    void prepare (double s) { fs = s; l.allocate ((int) (2.1 * fs)); r.allocate ((int) (2.1 * fs)); hp.reset(); lp.reset(); dSmooth = -1.0f; dCoef = msToCoef (50.0f, fs); }
     void set (float hpf, float lpf) { hp.setHPF (fs, hpf); lp.setLPF (fs, lpf); }
     inline void process (float in, float timeMs, float fb, bool pingPong, float& outL, float& outR)
     {
-        int d = std::clamp ((int) (timeMs * 0.001 * fs), 1, (int) (2.0 * fs));
-        float yl = l.read (d), yr = r.read (d);
+        float target = std::clamp ((float) (timeMs * 0.001 * fs), 1.0f, (float) (2.0 * fs));
+        dSmooth = dSmooth < 0 ? target : dCoef * dSmooth + (1 - dCoef) * target;   // glide on tempo changes
+        float yl = l.readFrac (dSmooth), yr = r.readFrac (dSmooth);
         float fl = lp.process (hp.process (yl, 0), 0), fr = lp.process (hp.process (yr, 1), 1);
         if (pingPong) { l.push (in + fr * fb); r.push (fl * fb); }
         else          { l.push (in + fl * fb); r.push (in + fr * fb); }
-        outL = fl; outR = pingPong ? fr : fr;
+        outL = fl; outR = fr;
+    }
+};
+
+inline float noteMs (int note, float bpm)
+{
+    static const float beats[5] = { 1.0f, 0.75f, 0.5f, 1.0f / 3.0f, 0.25f };   // 1/4, 1/8., 1/8, 1/8T, 1/16
+    return 60000.0f / std::max (20.0f, bpm) * beats[std::clamp (note, 0, 4)];
+}
+
+//==============================================================================
+// 90-degree phase splitter (two allpass chains, Olli Niemitalo's coefficients): gives an analytic signal
+// I + jQ that is accurate from ~0.002*fs to ~0.498*fs.
+struct Hilbert
+{
+    static constexpr int kN = 4;
+    // coefficients are squared in the filter: H(z) = (a^2 - z^-2) / (1 - a^2 z^-2); path 1 delayed by one sample.
+    // Verified: 90 +/- 1 degrees from 30 Hz to 23 kHz at 48 kHz.
+    double a1[kN] { 0.6923878, 0.9360654322959, 0.9882295226860, 0.9987488452737 };
+    double a2[kN] { 0.4021921162426, 0.8561710882420, 0.9722909545651, 0.9952884791278 };
+    double x1[kN][2] {}, y1[kN][2] {}, x2[kN][2] {}, y2[kN][2] {}, iDelay = 0;
+    Hilbert() { for (int i = 0; i < kN; ++i) { a1[i] *= a1[i]; a2[i] *= a2[i]; } }
+    void reset() { for (int i = 0; i < kN; ++i) for (int k = 0; k < 2; ++k) x1[i][k] = y1[i][k] = x2[i][k] = y2[i][k] = 0; iDelay = 0; }
+    static inline double chain (double x, const double* a, double (*xs)[2], double (*ys)[2])
+    {
+        for (int i = 0; i < kN; ++i)
+        {
+            double y = a[i] * (x + ys[i][1]) - xs[i][1];
+            xs[i][1] = xs[i][0]; xs[i][0] = x; ys[i][1] = ys[i][0]; ys[i][0] = y;
+            x = y;
+        }
+        return x;
+    }
+    // I and Q are 90 degrees apart (Q leads I); analytic signal = I - jQ
+    inline void process (float in, float& I, float& Q)
+    {
+        double i = chain (in, a1, x1, y1);
+        I = (float) iDelay; iDelay = i;
+        Q = (float) chain (in, a2, x2, y2);
+    }
+};
+
+// Vocal width layer, modelled on the Suno measurement: a dry-correlated component that lives only in
+// the Side channel (so mono playback is untouched), band-limited with a gentle high tilt, near-zero
+// delay. Two single-sideband frequency shifts (+f1 / -f2 Hz): the same tiny phase rotation at every
+// frequency, which is what the Suno layer showed (high frequencies stay coherent as long as lows).
+struct MicroWidth
+{
+    DelayLine bufI, bufQ; Biquad hp, lp, tilt; Hilbert hil; double fs = 48000;
+    double phA = 0, phB = 0.31, incA = 0, incB = 0; float dA = 0, dB = 0, gain = 0;
+    // phrase / syllable tracking for bloom and motion
+    float envF = 0, envS = 0, cF = 0, cS = 0, silentFor = 1e9f, sinceOnset = 1e9f, gEnv = 1, gCoefUp = 0, gCoefDn = 0;
+    float bloomFloor = 1, bloomSamples = 1, motion = 0, phraseAge = 1e9f, pauseLen = 0;
+    void prepare (double s)
+    {
+        fs = s; bufI.allocate ((int) (0.03 * fs)); bufQ.allocate ((int) (0.03 * fs)); hp.reset(); lp.reset(); tilt.reset(); hil.reset();
+        cF = msToCoef (5, fs); cS = msToCoef (80, fs); gCoefUp = msToCoef (60, fs); gCoefDn = msToCoef (25, fs);
+    }
+    void set (const Params& p, float amt)
+    {
+        hp.setHPF (fs, p.widthHpf, 0.7071); lp.setLPF (fs, p.widthLpf, 0.7071);
+        setHighShelf (tilt, fs, 2500.0, p.widthTiltDb);
+        incA = p.widthShiftHz / fs; incB = p.widthShiftHz * 1.37 / fs;
+        dA = (float) (p.widthDelayMs * 0.001 * fs); dB = (float) (p.widthDelayMs * 1.6 * 0.001 * fs);
+        gain = (p.widthOn && amt > 0) ? dbToGain (p.widthLevelDb) * amt * 1.41421356f : 0.0f;   // two voices -> side
+        bloomFloor = dbToGain (-std::max (0.0f, p.widthBloomDb)); bloomSamples = (float) (std::max (1.0f, p.widthBloomMs) * 0.001 * fs);
+        motion = std::clamp (p.widthMotion, 0.0f, 1.0f);
+    }
+    static void setHighShelf (Biquad& b, double fs, double f, double db)
+    {
+        double A = std::pow (10.0, db / 40.0), w = 2 * kPi * f / fs, c = std::cos (w), sn = std::sin (w), al = sn / 2 * std::sqrt (2.0), sq = 2 * std::sqrt (A) * al;
+        b.setNorm (A * ((A + 1) + (A - 1) * c + sq), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - sq),
+                   (A + 1) - (A - 1) * c + sq, 2 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - sq);
+    }
+    // returns the side signal to add (L += s, R -= s)
+    inline float process (float mono)
+    {
+        if (gain <= 0) return 0.0f;
+        float x = tilt.process (lp.process (hp.process (mono, 0), 0), 0);
+        float I, Q; hil.process (x, I, Q);
+        bufI.push (I); bufQ.push (Q);
+        phA += incA; if (phA >= 1) phA -= 1; phB += incB; if (phB >= 1) phB -= 1;
+        const double tw = 2 * kPi;
+        float ia = bufI.readFrac (dA), qa = bufQ.readFrac (dA), ib = bufI.readFrac (dB), qb = bufQ.readFrac (dB);
+        float a = ia * (float) std::cos (tw * phA) + qa * (float) std::sin (tw * phA);   // shifted up   (Re{(I - jQ) e^{+j phi}})
+        float b = ib * (float) std::cos (tw * phB) - qb * (float) std::sin (tw * phB);   // shifted down (Re{(I - jQ) e^{-j phi}})
+        // envelopes for bloom (phrase starts) and motion (held notes vs syllable onsets)
+        float e = mono * mono;
+        envF = cF * envF + (1 - cF) * e; envS = cS * envS + (1 - cS) * e;
+        float lf = 10 * std::log10 (envF + 1e-12f), ls = 10 * std::log10 (envS + 1e-12f);
+        bool silent = lf < -18.0f - 30.0f;
+        silentFor = silent ? silentFor + 1 : 0;
+        if (! silent && lf > ls + 6.0f) sinceOnset = 0; else sinceOnset += 1;
+        // bloom: after a pause the layer starts lower and opens over bloomMs. Depth and time scale with
+        // the length of the pause (Suno: mono for ~200 ms after real silence, only slightly lower after a breath).
+        if (silent) { if (silentFor > 0.08f * (float) fs) { phraseAge = 0; pauseLen = silentFor; } }
+        else phraseAge += 1;
+        float depth = std::min (1.0f, pauseLen / (0.4f * (float) fs));
+        float floorG = std::pow (bloomFloor, depth);
+        float bloom = floorG + (1 - floorG) * std::min (1.0f, phraseAge / (bloomSamples * (1.0f + depth)));
+        // motion: on held notes only (opens ~150 ms after the last syllable onset)
+        float held = std::clamp ((sinceOnset - 0.05f * (float) fs) / (0.15f * (float) fs), 0.0f, 1.0f);
+        float target = bloom * (1 - motion + motion * held);
+        gEnv = target > gEnv ? gCoefUp * gEnv + (1 - gCoefUp) * target : gCoefDn * gEnv + (1 - gCoefDn) * target;
+        return 0.5f * (a - b) * gain * gEnv;
     }
 };
 
@@ -278,15 +402,19 @@ struct FDNReverb
     DelayLine pre;
     std::array<float, 8> erTime {}, erGain {};
     float erLevel = 0.4f;
+    // input diffusion: series allpasses smear the first echoes (Suno's reverb arrives diffuse, no slap)
+    static constexpr int kAp = 6;
+    std::array<DelayLine, kAp> ap; std::array<int, kAp> apLen {}; float apG = 0.7f; int nAp = kAp;
 
     void prepare (double s)
     {
         fs = s;
         for (auto& d : lines) d.allocate ((int) (0.25 * fs));
         pre.allocate ((int) (0.6 * fs));
+        for (auto& a : ap) a.allocate ((int) (0.06 * fs));
         for (int i = 0; i < N; ++i) { lpState[i] = 0; modPhase[i] = (float) i * 0.7f; modRate[i] = 0.37f + 0.11f * (float) i; }
     }
-    void clear() { for (auto& d : lines) d.clear(); pre.clear(); lpState.fill (0); }
+    void clear() { for (auto& d : lines) d.clear(); pre.clear(); for (auto& a : ap) a.clear(); lpState.fill (0); }
 
     void set (const Params& p)
     {
@@ -311,12 +439,23 @@ struct FDNReverb
         static const float erT[8] = { 0.35f, 0.5f, 0.62f, 0.75f, 0.88f, 1.0f, 1.15f, 1.3f };
         for (int i = 0; i < 8; ++i) { erTime[i] = (float) (erT[i] * p.earlyMs * 0.001 * fs); erGain[i] = std::pow (0.85f, (float) i) * 0.5f; }
         erLevel = dbToGain (p.earlyLevelDb);
+        static const float apMs[kAp] = { 4.7f, 7.3f, 11.1f, 16.9f, 23.3f, 31.7f };
+        for (int i = 0; i < kAp; ++i) apLen[(size_t) i] = std::max (1, (int) (apMs[i] * p.size * p.diffusionSize * 0.001 * fs));
+        apG = std::clamp (p.diffusion, 0.0f, 0.85f);
+        nAp = apG > 0.01f ? kAp : 0;
     }
 
     inline void process (float in, float predelaySamples, float& outL, float& outR)
     {
         pre.push (in);
         float x = pre.readFrac (std::max (0.0f, predelaySamples));
+        for (int i = 0; i < nAp; ++i)
+        {
+            float d = ap[(size_t) i].read (apLen[(size_t) i] - 1);
+            float v = x + apG * d;
+            ap[(size_t) i].push (v);
+            x = d - apG * v;
+        }
         // early reflections, alternating sides
         float eL = 0, eR = 0;
         for (int i = 0; i < 8; ++i)
@@ -505,24 +644,34 @@ public:
     DeEsser deess;
     StereoDelay delay;
     FDNReverb rev;
+    MicroWidth widthLayer;
     Learner learner;
     Biquad wetHp, wetLp, wetBump;
+    DelayLine laL, laR;                       // lookahead for the compressors
+    int lookahead = 0;
     float duckEnv = 0, duckGr = 0, duckEnvCoef = 0, duckAtk = 0, duckRel = 0;
-    float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, satDrive = 1, satMix = 0;
+    float rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60;
+    float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, delaySend = 0, satDrive = 1, satMix = 0;
     float predelaySamp = 0;
     double fs = 48000;
     std::array<float, kNumBands> lastCorrection {};
     float eqMakeup = 1.0f;
     bool eqValid = false;
+    // meters (written by the audio thread, read by the editor)
+    std::atomic<float> mGr1 { 0 }, mGr2 { 0 }, mDuck { 0 }, mIn { -100 }, mOut { -100 }, mWidth { -100 }, mDelayMs { 0 };
 
     void prepare (double sampleRate)
     {
         fs = sampleRate;
-        eq.prepare (fs); eqValid = false; deess.prepare (fs, p.deessFreq); c1.reset(); c2.reset(); delay.prepare (fs); rev.prepare (fs); learner.prepare (fs);
+        lookahead = (int) std::round (0.005 * fs);
+        laL.allocate (lookahead + 4); laR.allocate (lookahead + 4);
+        eq.prepare (fs); eqValid = false; deess.prepare (fs, p.deessFreq); c1.reset(); c2.reset(); delay.prepare (fs); rev.prepare (fs);
+        widthLayer.prepare (fs); learner.prepare (fs);
         wetHp.reset(); wetLp.reset(); wetBump.reset();
         setParams (p);
     }
-    void reset() { rev.clear(); delay.l.clear(); delay.r.clear(); c1.reset(); c2.reset(); duckGr = duckEnv = 0; }
+    int getLatency() const { return lookahead; }
+    void reset() { rev.clear(); delay.l.clear(); delay.r.clear(); laL.clear(); laR.clear(); c1.reset(); c2.reset(); duckGr = duckEnv = 0; }
 
     void setParams (const Params& np)
     {
@@ -535,8 +684,7 @@ public:
         auto corr = computeCorrection (p);
         if (corr != lastCorrection || ! eqValid) { eq.setGains (MatchEQ::solve (corr, fs)); lastCorrection = corr; eqValid = true; }
 
-        // Comp 1 (fast, peaks): gain reduction from the crest-factor difference
-        // Comp 2 (slow leveler): ratio from the phrase-level spread difference, threshold under the quiet phrases
+        // Comp 1 (fast, peak detector): gain reduction from the crest-factor difference
         const bool learned = p.sourceCrestDb > 0.0f;
         const float crestIn = learned ? p.sourceCrestDb : 12.0f;
         const float spreadIn = (learned && p.sourceSpreadDb > 0.0f) ? p.sourceSpreadDb : 8.0f;
@@ -547,17 +695,18 @@ public:
         const float thr1 = g1 > 0.05f ? typicalPeak - g1 / (1.0f - 1.0f / p.comp1Ratio) : 50.0f;
         c1.set (fs, thr1, p.comp1Ratio, p.comp1AttackMs, p.comp1ReleaseMs, g1 * 0.7f);
 
-        // The Suno target includes its reverb, which adds ~0.8 dB of spread on its own, so aim the dry
-        // signal slightly lower. Measured in tests: the leveler only removes ~30 % of the nominal
-        // ratio's effect on 400 ms levels (attack/release, syllable gaps), hence the x3.5 factor.
+        // Comp 2 (leveler, 20 ms RMS detector, lookahead, holds during pauses).
+        // The Suno target includes its reverb (+~0.8 dB of spread), so the dry aim is slightly lower.
         const float spreadTarget = std::max (2.0f, p.targetSpreadDb - 0.8f);
-        float r2 = learned ? std::clamp (1.0f + 3.5f * (spreadIn / spreadTarget - 1.0f), 1.0f, std::max (1.0f, p.comp2Ratio))
-                           : std::min (2.0f, std::max (1.0f, p.comp2Ratio));   // gentle default until Learn
+        float r2 = learned ? std::clamp (1.0f + p.levelerFactor * (spreadIn / spreadTarget - 1.0f), 1.0f, std::max (1.0f, p.comp2Ratio))
+                           : std::min (1.6f, std::max (1.0f, p.comp2Ratio));   // gentle default until Learn
         r2 = 1.0f + (r2 - 1.0f) * cAmt;
-        const float thr2 = typicalPeak - g1 * 0.5f - spreadIn * 0.5f - 3.0f;   // below the quiet (p10) phrases
-        const float med2 = (typicalPeak - g1 * 0.5f) - thr2;                    // median phrase sits this far above
-        const float makeup2 = med2 * (1.0f - 1.0f / r2);
+        const float thr2 = -18.0f - spreadIn * 0.5f - 2.0f;     // RMS domain, just under the quiet phrases
+        const float makeup2 = (-18.0f - thr2) * (1.0f - 1.0f / r2);
         c2.set (fs, r2 > 1.01f ? thr2 : 50.0f, r2, p.comp2AttackMs, p.comp2ReleaseMs, r2 > 1.01f ? makeup2 : 0.0f);
+        rmsCoef = msToCoef (20.0f, fs);
+        holdCoef = msToCoef (10.0f, fs);
+        holdDb = -18.0f - 20.0f;                                  // below this the singer is pausing: freeze gains
 
         // keep loudness after the match EQ: energy change of the correction, weighted by your spectrum
         eqMakeup = 1.0f;
@@ -577,6 +726,7 @@ public:
 
         delay.set (p.delayHpf, p.delayLpf);
         delayGain = (p.delayOn && amt > 0) ? dbToGain (p.delayLevelDb) * amt : 0.0f;
+        delaySend = (p.delayOn && amt > 0) ? std::clamp (p.delayToReverb, 0.0f, 1.0f) * dbToGain (p.delayLevelDb + 6.0f) : 0.0f;
 
         rev.set (p);
         predelaySamp = (float) (p.predelayMs * 0.001 * fs);
@@ -584,57 +734,77 @@ public:
         wetLp.setLPF (fs, std::min ((float) (fs * 0.45), p.wetLpf), 0.8);
         wetBump.setPeak (fs, p.wetBumpHz, 1.0, p.wetBumpDb);
         wetGain = (p.reverbOn && amt > 0) ? dbToGain (p.reverbLevelDb) * amt : 0.0f;
+        widthLayer.set (p, amt);
 
         duckEnvCoef = msToCoef (10.0f, fs);
         duckAtk = msToCoef (p.duckAttackMs, fs); duckRel = msToCoef (p.duckReleaseMs, fs);
     }
 
+    float currentDelayMs() const { return p.delaySync ? noteMs (p.delayNote, p.bpm) : p.delayMs; }
+
     void process (float* L, float* R, int n)
     {
         const float duckDepth = p.duckDb * std::clamp (p.amount, 0.0f, 1.0f);
         const float presenceFloor = -18.0f - 15.0f;
+        const float dlyMs = currentDelayMs();
+        float maxGr1 = 0, maxGr2 = 0, maxDuck = 0, pkIn = 0, pkOut = 0, wE = 0, dE = 0;
         for (int i = 0; i < n; ++i)
         {
             float l = L[i], r = R ? R[i] : L[i];
+            pkIn = std::max (pkIn, std::max (std::abs (l), std::abs (r)));
             learner.push (0.5f * (l + r));
             l *= inGain; r *= inGain;
-            // match EQ
             l = eq.process (l, 0) * eqMakeup; r = eq.process (r, 1) * eqMakeup;
-            // compressors (stereo linked)
-            float g = c1.computeGain (std::max (std::abs (l), std::abs (r))); l *= g; r *= g;
-            g = c2.computeGain (std::max (std::abs (l), std::abs (r)));      l *= g; r *= g;
+            // detectors run on the un-delayed signal, gains are applied to the 5 ms delayed signal
+            float pk = std::max (std::abs (l), std::abs (r)), e = 0.5f * (l * l + r * r);
+            rmsEnv = rmsCoef * rmsEnv + (1 - rmsCoef) * e;
+            holdEnv = holdCoef * holdEnv + (1 - holdCoef) * e;
+            const bool pause = 10 * std::log10 (holdEnv + 1e-12f) < holdDb;
+            float g1 = c1.computeGain (pk, pause);
+            float g2 = c2.computeGain (std::sqrt (rmsEnv) * g1, pause);   // RMS domain
+            maxGr1 = std::max (maxGr1, c1.gr); maxGr2 = std::max (maxGr2, c2.gr);
+            laL.push (l); laR.push (r);
+            l = laL.read (lookahead - 1) * g1 * g2; r = laR.read (lookahead - 1) * g1 * g2;
             deess.process (l, r);
             if (satMix > 0)
             {
                 float sl = std::tanh (l * satDrive) / satDrive, sr = std::tanh (r * satDrive) / satDrive;
                 l += satMix * (sl - l); r += satMix * (sr - r);
             }
-            // wet bus
             float mono = 0.5f * (l + r);
-            float wl = 0, wr = 0;
+            // width layer: side only, follows the dry vocal (not ducked)
+            float ws = widthLayer.process (mono);
+            wE += ws * ws; dE += mono * mono;
+            // wet bus: delay (also feeding the reverb) + reverb
+            float wl = 0, wr = 0, dl = 0, dr = 0;
+            if (delayGain > 0)
+            {
+                delay.process (mono, dlyMs, p.delayFeedback, p.delayPingPong, dl, dr);
+                wl += dl * delayGain; wr += dr * delayGain;
+            }
             if (wetGain > 0)
             {
-                float rl, rr; rev.process (mono, predelaySamp, rl, rr);
+                float rl, rr; rev.process (mono + 0.5f * (dl + dr) * delaySend, predelaySamp, rl, rr);
                 rl = wetBump.process (wetLp.process (wetHp.process (rl, 0), 0), 0);
                 rr = wetBump.process (wetLp.process (wetHp.process (rr, 1), 1), 1);
                 float m = 0.5f * (rl + rr), s = 0.5f * (rl - rr) * p.width;
                 wl += (m + s) * wetGain; wr += (m - s) * wetGain;
-            }
-            if (delayGain > 0)
-            {
-                float dl, dr; delay.process (mono, p.delayMs, p.delayFeedback, p.delayPingPong, dl, dr);
-                wl += dl * delayGain; wr += dr * delayGain;
             }
             // ducking by dry level
             duckEnv = duckEnvCoef * duckEnv + (1 - duckEnvCoef) * mono * mono;
             float lvl = 10 * std::log10 (duckEnv + 1e-12f);
             float target = duckDepth * std::clamp ((lvl - presenceFloor) / 10.0f, 0.0f, 1.0f);
             duckGr = target > duckGr ? duckAtk * duckGr + (1 - duckAtk) * target : duckRel * duckGr + (1 - duckRel) * target;
+            maxDuck = std::max (maxDuck, duckGr);
             float dg = dbToGain (-duckGr);
-            l += wl * dg; r += wr * dg;
+            l += wl * dg + ws; r += wr * dg - ws;
             L[i] = l * outGain;
             if (R) R[i] = r * outGain;
+            pkOut = std::max (pkOut, std::max (std::abs (L[i]), R ? std::abs (R[i]) : 0.0f));
         }
+        mDelayMs = dlyMs;
+        mGr1 = maxGr1; mGr2 = maxGr2; mDuck = maxDuck; mIn = gainToDb (pkIn); mOut = gainToDb (pkOut);
+        mWidth = dE > 1e-9f ? 10 * std::log10 (wE / dE + 1e-12f) : -100.0f;
     }
 };
 } // namespace sc

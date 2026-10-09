@@ -22,7 +22,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 8.0; }
+    double getTailLengthSeconds() const override { return 10.0; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -36,9 +36,11 @@ public:
     //==============================================================================
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    static juce::File presetFolder();
 
     // preset handling (message thread)
     bool loadPresetFile (const juce::File& f, juce::String& error);
+    bool savePresetFile (const juce::File& f, juce::String& error);
     juce::String getPresetName() const;
     bool hasPreset() const;
 
@@ -50,7 +52,7 @@ public:
     bool hasLearned() const;
     void clearLearn();
 
-    // for the editor graph (message thread)
+    // for the editor (message thread)
     struct CurveSnapshot
     {
         std::array<float, sc::kNumBands> target {}, source {}, correction {};
@@ -58,14 +60,17 @@ public:
         float sourceLevel = 0, sourceCrest = 0, targetCrest = 0;
     };
     CurveSnapshot getCurves() const;
+    struct Meters { float gr1, gr2, duck, in, out, width; double bpm; float delayMs; };
+    Meters getMeters() const;
 
 private:
     void parameterChanged (const juce::String&, float) override { dirty = true; }
     sc::Params buildParams() const;   // call with presetLock held
-    void restorePresetFromTree();
+    void restorePresetFromTree();     // presetJson -> hidden (lock held)
 
     sc::Chain chain;
     std::atomic<bool> dirty { true };
+    std::atomic<double> hostBpm { 120.0 };
     mutable juce::SpinLock presetLock;
     sc::Params hidden;                 // preset/learned values that are not host parameters
     juce::String presetName { "No preset (load a .json)" };
