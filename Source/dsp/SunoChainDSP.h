@@ -52,9 +52,16 @@ struct Params
     float levelerFactor = 1.5f;     // calibration: nominal ratio needed per unit of spread excess (tested on real vocals)
     float compAmount = 1.0f;
 
-    // sibilance balancer (v1.2): level of "s"/"z" relative to the vowel around them, as in the Suno vocal
-    // deessTargetDb = Suno's median sibilant-over-vowel minus 3.5 dB (calibration: detector vs measurement), ratio 6
-    float deessFreq = 4000.0f, deessTargetDb = -6.0f, deessRatio = 6.0f, deessMaxDb = 20.0f, deessAmount = 1.0f;
+    // sibilance balancer (v1.3): level of "s"/"z"/"sh" relative to the vowel around them, as in the Suno vocal.
+    // deessTargetDb = detector threshold (sibilant over vowel, dB) = Suno median + deessOffsetDb (calibration),
+    // deessRatio = how strongly sibilants above it are pulled down. deessFreq / deessMaxDb: unused since v1.3.
+    float deessFreq = 4000.0f, deessTargetDb = -2.5f, deessRatio = 3.0f, deessMaxDb = 20.0f, deessAmount = 1.0f;
+    // S/Z Match (v1.3): sibilant spectrum relative to the preceding vowel, bands 2k..16k (10 values).
+    // Target from the preset (Suno), source from Learn. Default target = Suno Lead 01.
+    std::array<float, 10> sibTarget { -25.18f, -26.2f, -23.47f, -16.63f, -16.35f, -15.0f, -15.38f, -11.27f, -14.66f, -23.78f };
+    std::array<float, 10> sibSource {};
+    bool hasSibTarget = true, hasSibSource = false;
+    float deessDetLoDb = -14.0f, deessDetSpanDb = 6.0f;   // detector: raw high-band share where S/Z Match starts / is fully on
 
     // saturation (not measurable from stems: preset default)
     float satDriveDb = 6.0f, satMix = 0.15f;
@@ -75,6 +82,11 @@ struct Params
     float widthHpf = 200.0f, widthLpf = 16000.0f;
     float widthBloomDb = 12.0f, widthBloomMs = 200.0f;   // layer starts lower at phrase starts (measured in Suno)
     float widthMotion = 0.0f;           // 0 = constant (Suno), 1 = only on held notes
+
+    // multiband width (v1.3): gain on the Side signal of each source in three bands (Linkwitz-Riley 4th order,
+    // the bands sum flat). Mid and mono stay untouched. dB, 0 = unchanged.
+    float xoverLowHz = 300.0f, xoverHighHz = 4000.0f;
+    std::array<float, 3> revBandDb { 0, 0, 0 }, layerBandDb { 0, 0, 0 }, delayBandDb { 0, 0, 0 };
 
     // reverb
     bool  reverbOn = true;
@@ -133,6 +145,12 @@ struct Biquad
         double A = std::pow (10.0, db / 40.0), w = 2 * kPi * f / fs, c = std::cos (w), sn = std::sin (w), al = sn / (2 * q), sq = 2 * std::sqrt (A) * al;
         setNorm (A * ((A + 1) + (A - 1) * c + sq), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - sq),
                  (A + 1) - (A - 1) * c + sq, 2 * ((A - 1) - (A + 1) * c), (A + 1) - (A - 1) * c - sq);
+    }
+    void setAllpass (double fs, double f, double q = 0.7071)
+    {
+        f = std::min (f, fs * 0.45);
+        double w = 2 * kPi * f / fs, al = std::sin (w) / (2 * q), c = std::cos (w);
+        setNorm (1 - al, -2 * c, 1 + al, 1 + al, -2 * c, 1 - al);
     }
     double magDb (double fs, double f) const
     {
@@ -232,68 +250,212 @@ struct Compressor
 };
 
 //==============================================================================
+// radix-2 FFT, in place
+inline void fftInPlace (std::vector<std::complex<float>>& a)
+{
+    const size_t n = a.size();
+    for (size_t i = 1, j = 0; i < n; ++i)
+    {
+        size_t bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) std::swap (a[i], a[j]);
+    }
+    for (size_t len = 2; len <= n; len <<= 1)
+    {
+        double ang = -2 * kPi / (double) len;
+        std::complex<float> wl ((float) std::cos (ang), (float) std::sin (ang));
+        for (size_t i = 0; i < n; i += len)
+        {
+            std::complex<float> w (1, 0);
+            for (size_t j = 0; j < len / 2; ++j)
+            {
+                auto u = a[i + j], v = a[i + j + len / 2] * w;
+                a[i + j] = u + v; a[i + j + len / 2] = u - v; w *= wl;
+            }
+        }
+    }
+}
+
+// Sibilant analysis shared by Learn (your voice) and the preset analyzer (Suno vocal): spectrum of "s"/"z"/"sh"
+// relative to the vowel level just before them, in the 26-band grid from 2 kHz up.
+// 10 ms frames, band powers from a ~21 ms Hann FFT (sharp bands: no leakage from the boosted top end); sibilant frame = high band (>4 kHz, LR4) share above -6 dB and level within 30 dB of the loud
+// singing; segments of at least 60 ms; vowel reference = median level of the non-sibilant frames 30..250 ms before.
+struct SibilantAnalyzer
+{
+    static constexpr int kFirstBand = 16;                     // 2000 Hz
+    static constexpr int kSibBands = kNumBands - kFirstBand;  // 10 bands: 2k .. 16k
+    int maxFrames = 12000;                                    // 120 s (Learn); the analyzer uses more
+    Biquad hf1, hf2; double fs = 48000;
+    int nfft = 1024; std::vector<float> ring, win; int ringPos = 0; std::vector<std::complex<float>> fbuf;
+    std::array<int, kSibBands> k0 {}, k1 {}; double winNorm = 1;
+    std::vector<float> full, hf, bands;   // per frame: power
+    int frameLen = 480, pos = 0, n = 0; double aFull = 0, aHf = 0; std::array<double, kSibBands> aB {};   // aB unused since FFT bands
+    void prepare (double s, double seconds = 120.0)
+    {
+        fs = s; frameLen = std::max (1, (int) std::round (0.01 * fs)); maxFrames = (int) (seconds * 100.0);
+        hf1.setHPF (fs, 4000.0); hf2.setHPF (fs, 4000.0); hf1.reset(); hf2.reset();
+        nfft = 512; while (nfft < 0.021 * fs) nfft <<= 1;          // ~21 ms window (1024 at 48 kHz)
+        ring.assign ((size_t) nfft, 0.0f); win.resize ((size_t) nfft); fbuf.assign ((size_t) nfft, {}); ringPos = 0; winNorm = 0;
+        for (int i = 0; i < nfft; ++i) { win[(size_t) i] = (float) (0.5 - 0.5 * std::cos (2 * kPi * i / nfft)); winNorm += win[(size_t) i] * win[(size_t) i]; }
+        for (int b = 0; b < kSibBands; ++b)   // third-octave band edges in FFT bins
+        {
+            const double fc = bandCenters()[(size_t) (kFirstBand + b)];
+            k0[(size_t) b] = std::max (1, (int) std::ceil (fc / std::pow (2.0, 1.0 / 6) * nfft / fs));
+            k1[(size_t) b] = std::min (nfft / 2 - 1, (int) std::floor (fc * std::pow (2.0, 1.0 / 6) * nfft / fs));
+        }
+        full.assign ((size_t) maxFrames, 0.0f); hf.assign ((size_t) maxFrames, 0.0f); bands.assign ((size_t) maxFrames * kSibBands, 0.0f);
+        reset();
+    }
+    void reset() { pos = 0; n = 0; aFull = aHf = 0; aB.fill (0); std::fill (ring.begin(), ring.end(), 0.0f); ringPos = 0; }
+    inline void push (float x)
+    {
+        if (n >= maxFrames) return;
+        float h = hf2.process (hf1.process (x, 0), 0);
+        aFull += x * x; aHf += h * h;
+        ring[(size_t) ringPos] = x; ringPos = (ringPos + 1) % nfft;
+        if (++pos >= frameLen)
+        {
+            full[(size_t) n] = (float) (aFull / frameLen); hf[(size_t) n] = (float) (aHf / frameLen);
+            for (int i = 0; i < nfft; ++i) fbuf[(size_t) i] = { ring[(size_t) ((ringPos + i) % nfft)] * win[(size_t) i], 0.0f };
+            fftInPlace (fbuf);
+            for (int b = 0; b < kSibBands; ++b)   // band power (mean-square units, same scale as "full")
+            {
+                double e = 0; for (int k = k0[(size_t) b]; k <= k1[(size_t) b]; ++k) e += std::norm (fbuf[(size_t) k]);
+                bands[(size_t) n * kSibBands + b] = (float) (2.0 * e / (winNorm * nfft));
+            }
+            ++n; pos = 0; aFull = aHf = 0; aB.fill (0);
+        }
+    }
+    // curve: dB re vowel per band (2k..16k). Returns the number of sibilant segments used (needs >= 3).
+    // segRef (analysis tools only): take the sibilant segments from another, time-aligned analysis (e.g. the
+    // raw vocal) and measure this one on exactly those segments.
+    int summarise (std::array<float, kSibBands>& curve, const SibilantAnalyzer* segRef = nullptr) const
+    {
+        const int N = segRef ? std::min (n, segRef->n) : n;
+        if (N < 100) return 0;
+        auto levels = [N] (const SibilantAnalyzer& a, std::vector<float>& fdb, std::vector<float>& sh)
+        {
+            fdb.resize ((size_t) N); sh.resize ((size_t) N);
+            for (int i = 0; i < N; ++i) { fdb[(size_t) i] = 10 * std::log10 (a.full[(size_t) i] + 1e-20f); sh[(size_t) i] = 10 * std::log10 ((a.hf[(size_t) i] + 1e-20f) / (a.full[(size_t) i] + 1e-20f)); }
+        };
+        std::vector<float> fdb, sh, rdb, rsh;
+        levels (*this, fdb, sh);
+        if (segRef) levels (*segRef, rdb, rsh); else { rdb = fdb; rsh = sh; }
+        auto srt = rdb; std::sort (srt.begin(), srt.end());
+        const float rtop = srt[(size_t) (0.95 * (N - 1))];
+        auto srt2 = fdb; std::sort (srt2.begin(), srt2.end());
+        const float top = srt2[(size_t) (0.95 * (N - 1))];
+        std::vector<char> sib ((size_t) N);
+        for (int i = 0; i < N; ++i) sib[(size_t) i] = rsh[(size_t) i] > -6.0f && rdb[(size_t) i] > rtop - 30.0f;
+        std::vector<std::array<float, kSibBands>> rows;
+        for (int i = 0; i < N;)
+        {
+            if (! sib[(size_t) i]) { ++i; continue; }
+            int j = i; while (j < N && sib[(size_t) j]) ++j;
+            if (j - i >= 6 && i > 28)
+            {
+                std::vector<float> v;
+                for (int k = i - 25; k < i - 3; ++k) if (! sib[(size_t) k] && fdb[(size_t) k] > top - 30.0f) v.push_back (fdb[(size_t) k]);
+                if (v.size() >= 5)
+                {
+                    std::sort (v.begin(), v.end()); const float vref = v[v.size() / 2];
+                    std::array<float, kSibBands> row {};
+                    for (int b = 0; b < kSibBands; ++b)
+                    {
+                        double e = 0; for (int k = i; k < j; ++k) e += bands[(size_t) k * kSibBands + b];
+                        row[(size_t) b] = (float) (10 * std::log10 (e / (j - i) + 1e-20)) - vref;
+                    }
+                    rows.push_back (row);
+                }
+            }
+            i = j;
+        }
+        if (rows.size() < 3) return (int) rows.size();
+        for (int b = 0; b < kSibBands; ++b)
+        {
+            std::vector<float> c; for (auto& r : rows) c.push_back (r[(size_t) b]);
+            std::sort (c.begin(), c.end()); curve[(size_t) b] = c[c.size() / 2];
+        }
+        return (int) rows.size();
+    }
+};
+
 struct DeEsser
 {
-    // "Sibilance balancer" (v1.2). The Match EQ has to lift the highs a lot when the vowels are darker than
-    // Suno's, and a static EQ lifts "s"/"z" by the same amount. This keeps the level of sibilant moments
-    // relative to the vowel around them at the Suno balance: above sibTargetDb (dB over the vowel level)
-    // the high band is pulled down with sibRatio. Works on the band above `freq` (4 kHz by default, so "z"
-    // is covered too), detection is level independent.
-    Biquad hp, shelf; double sfs = 48000; float shelfFreq = 4000, shelfDb = 0;
-    float envHf = 0, envFull = 0, envCoef = 0, cut = 0, atk = 0, rel = 0;
-    float vowelRef = -60, vowAtk = 0, vowRel = 0, holdDecay = 0;
-    float targetDb = -2.5f, ratio = 3.0f, maxDb = 20.0f, amount = 1.0f;
-    int counter = 0; float curCutTarget = 0;
-    void setFreq (double fs, float freq) { hp.setHPF (fs, freq); sfs = fs; shelfFreq = freq; shelf.setHighShelf (fs, freq, -shelfDb); }
-    void prepare (double fs, float freq)
+    // "S/Z Match" (v1.3). The Match EQ makes your vowels sound like Suno's; this makes your "s"/"z"/"sh" sound
+    // like Suno's: a second set of EQ gains (from 1.25 kHz up) that is blended in only while the sound is
+    // sibilant. delta = (Suno sibilant spectrum - your sibilant spectrum) - vowel EQ correction, so on an "s"
+    // the total correction is exactly the sibilant match. Both spectra are measured relative to the vowel
+    // before each sibilant, so the "s" level relative to the vowel follows Suno too.
+    //  - detection on the signal BEFORE the Match EQ (raw high-band share: vowels below about -16 dB,
+    //    sibilants above about -10 dB), so bright vowels are never touched and nothing can freeze;
+    //  - released within ~30 ms after the sibilant; the detector runs 5 ms ahead (lookahead).
+    // Without a learned sibilant curve it simply takes the vowel EQ's high boost back off the sibilants.
+    static constexpr int kFirst = 14;              // 1250 Hz
+    static constexpr int kN = kNumBands - kFirst;  // 12 filters
+    std::array<Biquad, kN> f; std::array<float, kN> gainsDb {};
+    Biquad hp1, hp2; double sfs = 48000;
+    float ePreHf = 0, ePreFull = 0, envCoef = 0, atk = 0, rel = 0, amount = 1.0f, maxCut = 0, detLo = -14.0f, detSpan = 6.0f;
+    float k = 0, kTarget = 0, kApplied = -1; int counter = 0;
+    // the compressors pull vowels down more than the quieter sibilants; on a sibilant the S/Z Match also
+    // applies the gain reduction the preceding vowel had, so the "s" keeps its Suno level over the vowel
+    float vowelGainDb = 0, compLift = 0, liftTarget = 0, liftG = 1;
+
+    void prepare (double fs)
     {
-        hp.reset(); hp.setHPF (fs, freq); sfs = fs; shelfFreq = freq; shelf.reset(); shelfDb = 0; shelf.setIdentity();
-        envCoef = msToCoef (5.0f, fs); atk = msToCoef (1.5f, fs); rel = msToCoef (40.0f, fs);
-        vowAtk = msToCoef (30.0f, fs); vowRel = msToCoef (200.0f, fs); holdDecay = (float) (3.0 / fs);   // 3 dB/s while holding
+        sfs = fs; vowelGainDb = 0; compLift = liftTarget = 0; liftG = 1; hp1.reset(); hp2.reset(); hp1.setHPF (fs, 4000.0); hp2.setHPF (fs, 4000.0);
+        for (auto& u : f) { u.reset(); u.setIdentity(); }
+        envCoef = msToCoef (5.0f, fs); atk = msToCoef (1.5f, fs); rel = msToCoef (30.0f, fs);
+        k = kTarget = 0; kApplied = -1;
     }
-    inline void process (float& l, float& r)
+    // delta (dB per band, all 26; only >= 2 kHz used) at amount 1; solved for the overlapping cascade
+    void setDelta (std::array<float, kNumBands> delta, double fs)
     {
-        float hl = hp.process (l, 0), hr = hp.process (r, 1);
-        float hf = 0.5f * (hl * hl + hr * hr), full = 0.5f * (l * l + r * r);
-        envHf = envCoef * envHf + (1 - envCoef) * hf;
-        envFull = envCoef * envFull + (1 - envCoef) * full;
-        if ((++counter & 15) == 0)   // decisions every 16 samples, gain smoothing per sample
+        for (int i = 0; i < kNumBands; ++i) if (bandCenters()[(size_t) i] < 2000.0f) delta[(size_t) i] = 0.0f;
+        auto g = MatchEQ::solve (delta, fs);
+        maxCut = 0;
+        for (int i = 0; i < kN; ++i)
         {
-            const float fullDb = 10 * std::log10 (envFull + 1e-12f);
-            const float share = std::clamp ((envHf + 1e-12f) / (envFull + 1e-12f), 1e-4f, 1.0f);
-            const float ratioDb = 10 * std::log10 (share);
-            const bool voiced = fullDb > -60.0f;
-            // vowel reference: follows the level while the sound is not sibilant, holds (slowly decaying) through sibilants
-            if (voiced && ratioDb < -12.0f)
-            {
-                const float c = fullDb > vowelRef ? vowAtk : vowRel;
-                const float c16 = std::pow (c, 16.0f);
-                vowelRef = c16 * vowelRef + (1 - c16) * fullDb;
-            }
-            else vowelRef -= holdDecay * 16;
-            float target = 0;
-            const float w = std::clamp ((ratioDb + 12.0f) / 6.0f, 0.0f, 1.0f);   // 0 at -12 dB HF share, 1 at -6 dB
-            const float excess = fullDb - vowelRef - targetDb;
-            if (voiced && w > 0 && excess > 0 && amount > 0)
-            {
-                const float wantDb = std::min (excess * (1 - 1 / ratio) * w * amount, 30.0f);   // full-band reduction wanted
-                // HF gain a that lowers the full band by wantDb: (1-share) + share*a^2 = 10^(-want/10)
-                const float t = std::pow (10.0f, -wantDb / 10.0f) - (1 - share);
-                const float a2 = t > 1e-6f ? t / share : 1e-6f;
-                target = std::min (maxDb, -10 * std::log10 (std::min (1.0f, a2)));
-            }
-            curCutTarget = target;
+            float v = g[(size_t) (kFirst + i)];
+            if (bandCenters()[(size_t) (kFirst + i)] > fs * 0.45) v = 0;
+            gainsDb[(size_t) i] = v; maxCut = std::max (maxCut, -v);
         }
-        cut = curCutTarget > cut ? atk * cut + (1 - atk) * curCutTarget : rel * cut + (1 - rel) * curCutTarget;
-        // dynamic high shelf (clean: no band-split phase sums). Coefficients refreshed when the gain moves.
-        if (std::abs (cut - shelfDb) > 0.05f || ((counter & 15) == 0 && cut != shelfDb))
-        {
-            shelfDb = cut;
-            if (shelfDb < 0.01f) shelf.setIdentity(); else shelf.setHighShelf (sfs, shelfFreq, -shelfDb);
-        }
-        l = shelf.process (l, 0); r = shelf.process (r, 1);
+        kApplied = -1;
     }
-    float currentCut() const { return cut; }
+    // compGainDb: current gain of the compressors (dB, <= 0 when reducing), same time base as pre
+    inline void detect (float preL, float preR, float compGainDb)   // un-delayed, before the Match EQ
+    {
+        float a = hp2.process (hp1.process (preL, 0), 0), b = hp2.process (hp1.process (preR, 1), 1);
+        ePreHf   = envCoef * ePreHf   + (1 - envCoef) * 0.5f * (a * a + b * b);
+        ePreFull = envCoef * ePreFull + (1 - envCoef) * 0.5f * (preL * preL + preR * preR);
+        if ((++counter & 15) != 0) return;
+        const float shareDb = 10 * std::log10 ((ePreHf + 1e-14f) / (ePreFull + 1e-12f));
+        const bool voiced = 10 * std::log10 (ePreFull + 1e-12f) > -60.0f;
+        const float w = voiced ? std::clamp ((shareDb - detLo) / detSpan, 0.0f, 1.0f) : 0.0f;
+        kTarget = w * amount;
+        if (voiced && w <= 0.0f) { const float c = 0.97f; vowelGainDb = c * vowelGainDb + (1 - c) * compGainDb; }   // ~25 ms
+        liftTarget = std::clamp (compGainDb - vowelGainDb, 0.0f, 12.0f) * kTarget;
+    }
+    inline void apply (float& l, float& r)
+    {
+        k = kTarget > k ? atk * k + (1 - atk) * kTarget : rel * k + (1 - rel) * kTarget;
+        compLift = liftTarget > compLift ? atk * compLift + (1 - atk) * liftTarget : rel * compLift + (1 - rel) * liftTarget;
+        if (compLift > 0.01f) { const float g = dbToGain (-compLift); l *= g; r *= g; }
+        const float kq = k < 0.003f ? 0.0f : k;
+        if (std::abs (kq - kApplied) > 0.01f || (kq == 0.0f && kApplied != 0.0f))
+        {
+            for (int i = 0; i < kN; ++i)
+            {
+                const float g = kq * gainsDb[(size_t) i];
+                if (std::abs (g) < 0.01f) f[(size_t) i].setIdentity();
+                else f[(size_t) i].setPeak (sfs, bandCenters()[(size_t) (kFirst + i)], MatchEQ::kQ, g);
+            }
+            kApplied = kq;
+        }
+        for (auto& u : f) { l = u.process (l, 0); r = u.process (r, 1); }   // always run (identity when idle)
+    }
+    float currentCut() const { return k * maxCut; }   // dB at the most-cut band (meter)
 };
 
 //==============================================================================
@@ -429,6 +591,33 @@ struct MicroWidth
 };
 
 //==============================================================================
+// Three-band gain on a side signal: LR4 crossovers (low band all-pass compensated), so with all gains at
+// 0 dB the result is only an all-pass of the side channel. Gains glide to avoid zipper noise.
+struct SideBands
+{
+    Biquad lpA, lpB, hpA, hpB, lp2A, lp2B, hp2A, hp2B, ap; double fs = 48000;
+    std::array<float, 3> g { 1, 1, 1 }, gT { 1, 1, 1 }; float gc = 0;
+    void prepare (double s) { fs = s; for (auto* b : { &lpA, &lpB, &hpA, &hpB, &lp2A, &lp2B, &hp2A, &hp2B, &ap }) b->reset(); gc = msToCoef (20.0f, fs); }
+    void set (float fLow, float fHigh, const std::array<float, 3>& db, float scale = 1.0f)
+    {
+        fLow = std::clamp (fLow, 40.0f, 2000.0f); fHigh = std::clamp (fHigh, fLow * 2.0f, (float) (fs * 0.4));
+        lpA.setLPF (fs, fLow); lpB.setLPF (fs, fLow); hpA.setHPF (fs, fLow); hpB.setHPF (fs, fLow);
+        lp2A.setLPF (fs, fHigh); lp2B.setLPF (fs, fHigh); hp2A.setHPF (fs, fHigh); hp2B.setHPF (fs, fHigh);
+        ap.setAllpass (fs, fHigh);
+        for (int i = 0; i < 3; ++i) gT[(size_t) i] = dbToGain (std::clamp (db[(size_t) i], -40.0f, 18.0f) * scale);
+    }
+    inline float process (float s, int ch = 0)
+    {
+        for (int i = 0; i < 3; ++i) g[(size_t) i] = gc * g[(size_t) i] + (1 - gc) * gT[(size_t) i];
+        float lo = ap.process (lpB.process (lpA.process (s, ch), ch), ch);
+        float hi = hpB.process (hpA.process (s, ch), ch);
+        float mid = lp2B.process (lp2A.process (hi, ch), ch);
+        float top = hp2B.process (hp2A.process (hi, ch), ch);
+        return g[0] * lo + g[1] * mid + g[2] * top;
+    }
+};
+
+//==============================================================================
 // 8-line FDN, Hadamard feedback, two-band per-line decay, light delay modulation.
 struct FDNReverb
 {
@@ -545,47 +734,25 @@ struct Learner
     double fs = 48000;
     std::vector<std::complex<float>> buf;
     std::vector<float> window;
+    SibilantAnalyzer sib;
 
     void prepare (double s)
     {
-        fs = s; blockLen = (int) (0.05 * fs);
+        fs = s; blockLen = (int) (0.05 * fs); sib.prepare (s);
         frameBands.assign ((size_t) kMaxFrames * kNumBands, 0.0f); frameLevel.assign (kMaxFrames, -200.0f);
         blockRms.assign (kMaxBlocks, -200.0f); blockPeak.assign (kMaxBlocks, -200.0f);
         fifo.assign (kFft, 0.0f); buf.assign (kFft, {}); window.resize (kFft);
         for (int i = 0; i < kFft; ++i) window[(size_t) i] = (float) (0.5 - 0.5 * std::cos (2 * kPi * i / (kFft - 1)));
     }
-    void start() { nFrames = 0; nBlocks = 0; fifoPos = 0; blockPos = 0; bSum = 0; bPeak = 0; active = true; }
+    void start() { nFrames = 0; nBlocks = 0; fifoPos = 0; blockPos = 0; bSum = 0; bPeak = 0; sib.reset(); active = true; }
     void stop() { active = false; }
 
-    static void fft (std::vector<std::complex<float>>& a)
-    {
-        const size_t n = a.size();
-        for (size_t i = 1, j = 0; i < n; ++i)
-        {
-            size_t bit = n >> 1;
-            for (; j & bit; bit >>= 1) j ^= bit;
-            j ^= bit;
-            if (i < j) std::swap (a[i], a[j]);
-        }
-        for (size_t len = 2; len <= n; len <<= 1)
-        {
-            double ang = -2 * kPi / (double) len;
-            std::complex<float> wl ((float) std::cos (ang), (float) std::sin (ang));
-            for (size_t i = 0; i < n; i += len)
-            {
-                std::complex<float> w (1, 0);
-                for (size_t j = 0; j < len / 2; ++j)
-                {
-                    auto u = a[i + j], v = a[i + j + len / 2] * w;
-                    a[i + j] = u + v; a[i + j + len / 2] = u - v; w *= wl;
-                }
-            }
-        }
-    }
+    static void fft (std::vector<std::complex<float>>& a) { fftInPlace (a); }
 
     inline void push (float x)   // audio thread
     {
         if (! active) return;
+        sib.push (x);
         // crest blocks
         bSum += x * x; bPeak = std::max (bPeak, std::abs (x));
         if (++blockPos >= blockLen)
@@ -672,6 +839,133 @@ struct Learner
 };
 
 //==============================================================================
+// Width meter: side-minus-mid per band (low 100-300 Hz, mid 400-3000 Hz, high 5-12 kHz), separately while
+// singing and in the pauses. It classifies time exactly like the preset analyzer (singing = mid 12 dB above
+// side and within 30 dB of the loud parts; pause = 60-400 ms after a phrase of >= 400 ms, if the pause lasts
+// >= 150 ms), from the signal it measures, so the plugin's WIDTH graph and the Suno target in the preset are
+// the same measurement (render_cli 'meter' mode runs this on the Suno vocal).
+struct WidthMeter
+{
+    double fs = 48000; int hop5 = 240;
+    // 5 ms envelopes (10 ms window, 20 ms smoothing in dB), as the analyzer's env5
+    std::vector<float> rM, rS; int rPos = 0, rLen = 480, c5 = 0; double sM = 0, sS = 0;
+    std::array<float, 4> hM {}, hS {}; int hI = 0;
+    float top = -200, topUp = 0, topDn = 0;
+    // labels per 5 ms frame: 0 none, 1 singing, 2 pause, -1 pending
+    static constexpr int kLab = 512; std::array<signed char, kLab> lab {}; long frame = 0;
+    int singRun = 0, nonRun = 0; bool phraseOk = false; long pendStart = -1;
+    // FFT
+    int nfft = 2048, fftHop = 512, fPos = 0, fCount = 0; std::vector<float> ringM, ringS, win;
+    std::vector<std::complex<float>> bM, bS; std::array<int, 3> k0 {}, k1 {};
+    struct Pending { long centre; std::array<double, 6> e; };
+    std::vector<Pending> queue;
+    std::array<std::array<double, 6>, 2> acc {}; double coef = 1.0; bool sumAll = false;
+
+    void prepare (double s, double memorySeconds)
+    {
+        fs = s; hop5 = std::max (1, (int) std::round (0.005 * fs)); rLen = 2 * hop5;
+        rM.assign ((size_t) rLen, 0.0f); rS.assign ((size_t) rLen, 0.0f); rPos = 0; c5 = 0; sM = sS = 0;
+        hM.fill (-200.0f); hS.fill (-200.0f); hI = 0; top = -200; frame = 0; lab.fill (0);
+        topUp = (float) (1.0 - std::exp (-0.005 / 2.0)); topDn = 0.3f * 0.005f;   // rises over ~2 s, falls 0.3 dB/s
+        singRun = nonRun = 0; phraseOk = false; pendStart = -1;
+        nfft = 1024; while (nfft < 0.0427 * fs) nfft <<= 1; fftHop = nfft / 4; fPos = 0; fCount = 0;
+        ringM.assign ((size_t) nfft, 0.0f); ringS.assign ((size_t) nfft, 0.0f); win.resize ((size_t) nfft);
+        bM.assign ((size_t) nfft, {}); bS.assign ((size_t) nfft, {});
+        for (int i = 0; i < nfft; ++i) win[(size_t) i] = (float) (0.5 - 0.5 * std::cos (2 * kPi * i / nfft));
+        const double lo[3] { 100, 400, 5000 }, hi[3] { 300, 3000, 12000 };
+        for (int b = 0; b < 3; ++b) { k0[(size_t) b] = std::max (1, (int) std::ceil (lo[b] * nfft / fs)); k1[(size_t) b] = std::min (nfft / 2 - 1, (int) std::floor (hi[b] * nfft / fs)); }
+        queue.clear(); queue.reserve (64);
+        for (auto& a : acc) a.fill (0.0);
+        sumAll = memorySeconds <= 0; coef = sumAll ? 1.0 : std::exp (-(double) fftHop / (memorySeconds * fs));
+    }
+    inline void push (float l, float r)
+    {
+        const float m = 0.5f * (l + r), sd = 0.5f * (l - r);
+        // 10 ms running mean square
+        sM += (double) m * m - (double) rM[(size_t) rPos] * rM[(size_t) rPos];
+        sS += (double) sd * sd - (double) rS[(size_t) rPos] * rS[(size_t) rPos];
+        rM[(size_t) rPos] = m; rS[(size_t) rPos] = sd; rPos = (rPos + 1) % rLen;
+        ringM[(size_t) fPos] = m; ringS[(size_t) fPos] = sd; fPos = (fPos + 1) % nfft;
+        if (++c5 >= hop5) { c5 = 0; frame5(); }
+        if (++fCount >= fftHop) { fCount = 0; analyse(); }
+    }
+    void frame5()
+    {
+        hM[(size_t) hI] = 10 * std::log10 ((float) std::max (sM, 0.0) / rLen + 1e-20f);
+        hS[(size_t) hI] = 10 * std::log10 ((float) std::max (sS, 0.0) / rLen + 1e-20f); hI = (hI + 1) & 3;
+        const float em = 0.25f * (hM[0] + hM[1] + hM[2] + hM[3]), es = 0.25f * (hS[0] + hS[1] + hS[2] + hS[3]);
+        if (em > top) top += (em - top) * topUp; else top -= topDn;
+        if (em > top + 6.0f) top = em - 6.0f;                     // never far below the loud parts
+        const bool sing = (em - es) > 12.0f && em > top - 30.0f;
+        const long f = frame++;
+        auto& L = lab[(size_t) (f % kLab)];
+        if (sing)
+        {
+            if (pendStart >= 0) { for (long k = pendStart; k < f; ++k) if (lab[(size_t) (k % kLab)] == -1) lab[(size_t) (k % kLab)] = 0; pendStart = -1; }
+            ++singRun; nonRun = 0; L = 1;
+            return;
+        }
+        if (singRun > 0) { phraseOk = singRun >= 80; singRun = 0; nonRun = 0; }
+        ++nonRun;
+        // pause window 60..400 ms after a long enough phrase; confirmed once the pause has lasted 150 ms
+        if (phraseOk && nonRun > 12 && nonRun <= 80 && em > top - 60.0f)
+        {
+            if (nonRun < 30) { L = -1; if (pendStart < 0) pendStart = f; }
+            else
+            {
+                if (pendStart >= 0) { for (long k = pendStart; k < f; ++k) if (lab[(size_t) (k % kLab)] == -1) lab[(size_t) (k % kLab)] = 2; pendStart = -1; }
+                L = 2;
+            }
+        }
+        else L = 0;
+    }
+    void analyse()
+    {
+        for (int i = 0; i < nfft; ++i)
+        {
+            const int k = (fPos + i) % nfft;
+            bM[(size_t) i] = { ringM[(size_t) k] * win[(size_t) i], 0.0f };
+            bS[(size_t) i] = { ringS[(size_t) k] * win[(size_t) i], 0.0f };
+        }
+        fftInPlace (bM); fftInPlace (bS);
+        Pending pd; pd.centre = frame - (long) std::round ((nfft / 2.0) / hop5);
+        for (int b = 0; b < 3; ++b)
+        {
+            double em = 0, es = 0;
+            for (int k = k0[(size_t) b]; k <= k1[(size_t) b]; ++k) { em += std::norm (bM[(size_t) k]); es += std::norm (bS[(size_t) k]); }
+            pd.e[(size_t) (2 * b)] = em; pd.e[(size_t) (2 * b + 1)] = es;
+        }
+        if (queue.size() < 60) queue.push_back (pd);
+        // resolve frames whose label is final
+        size_t keep = 0;
+        for (size_t q = 0; q < queue.size(); ++q)
+        {
+            const auto& it = queue[q];
+            if (it.centre < 0 || frame - it.centre >= kLab - 8) continue;           // too old / before start
+            if (it.centre >= frame) { queue[keep++] = it; continue; }
+            const int L = lab[(size_t) (it.centre % kLab)];
+            if (L == -1) { queue[keep++] = it; continue; }
+            if (L == 1 || L == 2)
+            {
+                auto& a = acc[L == 1 ? 0 : 1];
+                for (int i = 0; i < 6; ++i) a[(size_t) i] = (sumAll ? a[(size_t) i] : coef * a[(size_t) i]) + (sumAll ? 1.0 : (1 - coef)) * it.e[(size_t) i];
+            }
+        }
+        queue.resize (keep);
+    }
+    // side - mid in dB: [0..2] singing low/mid/high, [3..5] pauses; -100 = no data yet
+    void values (std::array<float, 6>& out) const
+    {
+        for (int c = 0; c < 2; ++c)
+            for (int b = 0; b < 3; ++b)
+            {
+                const double em = acc[(size_t) c][(size_t) (2 * b)], es = acc[(size_t) c][(size_t) (2 * b + 1)];
+                out[(size_t) (c * 3 + b)] = em > 1e-12 ? (float) (10 * std::log10 ((es + 1e-30) / em)) : -100.0f;
+            }
+    }
+};
+
+//==============================================================================
 class Chain
 {
 public:
@@ -682,7 +976,9 @@ public:
     StereoDelay delay;
     FDNReverb rev;
     MicroWidth widthLayer;
+    SideBands revSB, layerSB, delaySB;
     Learner learner;
+    WidthMeter widthMeter;   // output width per band (WIDTH graph)
     Biquad wetHp, wetLp, wetBump;
     DelayLine laL, laR;                       // lookahead for the compressors
     int lookahead = 0;
@@ -691,20 +987,25 @@ public:
     float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, delaySend = 0, satDrive = 1, satMix = 0;
     float predelaySamp = 0;
     double fs = 48000;
-    std::array<float, kNumBands> lastCorrection {};
+    std::array<float, kNumBands> lastCorrection {}, lastSibDelta {};
+    bool sibValid = false;
     float eqMakeup = 1.0f;
     bool eqValid = false;
     // meters (written by the audio thread, read by the editor)
     std::atomic<float> mGr1 { 0 }, mGr2 { 0 }, mDuck { 0 }, mIn { -100 }, mOut { -100 }, mWidth { -100 }, mDelayMs { 0 }, mDeess { 0 };
     std::atomic<uint32_t> mBlocks { 0 };   // lets the editor see when the host stopped calling us
+    std::array<std::atomic<float>, 6> mWidthBands {};    // side-mid dB: [0..2] singing low/mid/high, [3..5] pauses (-100 = no data); bands 100-300 / 400-3k / 5-12k
 
     void prepare (double sampleRate)
     {
         fs = sampleRate;
         lookahead = (int) std::round (0.005 * fs);
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4);
-        eq.prepare (fs); eqValid = false; deess.prepare (fs, p.deessFreq); c1.reset(); c2.reset(); delay.prepare (fs); rev.prepare (fs);
+        eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); delay.prepare (fs); rev.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
+        revSB.prepare (fs); layerSB.prepare (fs); delaySB.prepare (fs);
+        widthMeter.prepare (fs, 8.0);
+        for (auto& m : mWidthBands) m = -100.0f;
         wetHp.reset(); wetLp.reset(); wetBump.reset();
         setParams (p);
     }
@@ -758,8 +1059,25 @@ public:
             }
             eqMakeup = (float) std::sqrt (a / std::max (b, 1e-12));
         }
-        deess.setFreq (fs, p.deessFreq);
-        deess.targetDb = p.deessTargetDb; deess.ratio = std::max (1.01f, p.deessRatio); deess.maxDb = p.deessMaxDb; deess.amount = p.deessAmount * amt;
+        {   // S/Z Match: extra correction on sibilants (see DeEsser)
+            std::array<float, kNumBands> delta {};
+            const int f0 = SibilantAnalyzer::kFirstBand;
+            const bool match = p.hasSource && p.hasSibSource && p.hasSibTarget;
+            const float makeupDb = gainToDb (eqMakeup);   // the EQ make-up lifts sibilants as well
+            std::array<float, kNumBands> raw {};
+            for (int b = f0; b < kNumBands; ++b)
+                raw[(size_t) b] = match ? p.eqAmount * amt * (p.sibTarget[(size_t) (b - f0)] - p.sibSource[(size_t) (b - f0)]) - corr[(size_t) b] - makeupDb
+                                        : -std::max (0.0f, corr[(size_t) b]);
+            for (int b = f0; b < kNumBands; ++b)   // light smoothing, limits
+            {
+                float sm = raw[(size_t) b] * 2, w = 2;
+                if (b > f0) { sm += raw[(size_t) b - 1]; w += 1; }
+                if (b < kNumBands - 1) { sm += raw[(size_t) b + 1]; w += 1; }
+                delta[(size_t) b] = std::clamp (sm / w, -18.0f, 6.0f);
+            }
+            if (delta != lastSibDelta || ! sibValid) { deess.setDelta (delta, fs); lastSibDelta = delta; sibValid = true; }
+        }
+        deess.amount = p.deessAmount * amt; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
         satDrive = dbToGain (p.satDriveDb); satMix = p.satMix * amt;
 
         delay.set (p.delayHpf, p.delayLpf);
@@ -773,6 +1091,9 @@ public:
         wetBump.setPeak (fs, p.wetBumpHz, 1.0, p.wetBumpDb);
         wetGain = (p.reverbOn && amt > 0) ? dbToGain (p.reverbLevelDb) * amt : 0.0f;
         widthLayer.set (p, amt);
+        revSB.set (p.xoverLowHz, p.xoverHighHz, p.revBandDb);
+        layerSB.set (p.xoverLowHz, p.xoverHighHz, p.layerBandDb);
+        delaySB.set (p.xoverLowHz, p.xoverHighHz, p.delayBandDb);
 
         duckEnvCoef = msToCoef (10.0f, fs);
         duckAtk = msToCoef (p.duckAttackMs, fs); duckRel = msToCoef (p.duckReleaseMs, fs);
@@ -792,6 +1113,7 @@ public:
             pkIn = std::max (pkIn, std::max (std::abs (l), std::abs (r)));
             learner.push (0.5f * (l + r));
             l *= inGain; r *= inGain;
+            const float preL = l, preR = r;
             l = eq.process (l, 0) * eqMakeup; r = eq.process (r, 1) * eqMakeup;
             // detectors run on the un-delayed signal, gains are applied to the 5 ms delayed signal
             float pk = std::max (std::abs (l), std::abs (r)), e = 0.5f * (l * l + r * r);
@@ -801,9 +1123,10 @@ public:
             float g1 = c1.computeGain (pk, pause);
             float g2 = c2.computeGain (std::sqrt (rmsEnv) * g1, pause);   // RMS domain
             maxGr1 = std::max (maxGr1, c1.gr); maxGr2 = std::max (maxGr2, c2.gr);
+            deess.detect (preL, preR, gainToDb (g1 * g2));     // 5 ms ahead of the audio it acts on
             laL.push (l); laR.push (r);
             l = laL.read (lookahead - 1) * g1 * g2; r = laR.read (lookahead - 1) * g1 * g2;
-            deess.process (l, r);
+            deess.apply (l, r);
             maxDs = std::max (maxDs, deess.currentCut());
             if (satMix > 0)
             {
@@ -812,21 +1135,22 @@ public:
             }
             float mono = 0.5f * (l + r);
             // width layer: side only, follows the dry vocal (not ducked)
-            float ws = widthLayer.process (mono);
+            float ws = layerSB.process (widthLayer.process (mono));
             wE += ws * ws; dE += mono * mono;
             // wet bus: delay (also feeding the reverb) + reverb
             float wl = 0, wr = 0, dl = 0, dr = 0;
             if (delayGain > 0)
             {
                 delay.process (mono, dlyMs, p.delayFeedback, p.delayPingPong, dl, dr);
-                wl += dl * delayGain; wr += dr * delayGain;
+                const float dm = 0.5f * (dl + dr), ds = delaySB.process (0.5f * (dl - dr));
+                wl += (dm + ds) * delayGain; wr += (dm - ds) * delayGain;
             }
             if (wetGain > 0)
             {
                 float rl, rr; rev.process (mono + 0.5f * (dl + dr) * delaySend, predelaySamp, rl, rr);
                 rl = wetBump.process (wetLp.process (wetHp.process (rl, 0), 0), 0);
                 rr = wetBump.process (wetLp.process (wetHp.process (rr, 1), 1), 1);
-                float m = 0.5f * (rl + rr), s = 0.5f * (rl - rr) * p.width;
+                float m = 0.5f * (rl + rr), s = revSB.process (0.5f * (rl - rr) * p.width);
                 wl += (m + s) * wetGain; wr += (m - s) * wetGain;
             }
             // ducking by dry level
@@ -837,11 +1161,13 @@ public:
             maxDuck = std::max (maxDuck, duckGr);
             float dg = dbToGain (-duckGr);
             l += wl * dg + ws; r += wr * dg - ws;
+            widthMeter.push (l, r);   // before the output gain: ratios only
             L[i] = l * outGain;
             if (R) R[i] = r * outGain;
             pkOut = std::max (pkOut, std::max (std::abs (L[i]), R ? std::abs (R[i]) : 0.0f));
         }
         mDelayMs = dlyMs; mDeess = maxDs;
+        { std::array<float, 6> wv {}; widthMeter.values (wv); for (size_t k = 0; k < 6; ++k) mWidthBands[k] = wv[k]; }
         mBlocks = mBlocks.load() + 1;
         mGr1 = maxGr1; mGr2 = maxGr2; mDuck = maxDuck; mIn = gainToDb (pkIn); mOut = gainToDb (pkOut);
         mWidth = dE > 1e-9f ? 10 * std::log10 (wE / dE + 1e-12f) : -100.0f;

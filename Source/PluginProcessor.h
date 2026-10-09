@@ -35,6 +35,9 @@ public:
 
     //==============================================================================
     juce::AudioProcessorValueTreeState apvts;
+    bool advancedOpen = false;   // editor drawer state (saved with the session)
+    float uiScale = 1.0f;        // editor size (saved with the session)
+    juce::File currentPresetFile; // for stepping through the preset folder
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     static juce::File presetFolder();
 
@@ -58,9 +61,12 @@ public:
         std::array<float, sc::kNumBands> target {}, source {}, correction {};
         bool hasTarget = false, hasSource = false;
         float sourceLevel = 0, sourceCrest = 0, targetCrest = 0;
+        std::array<float, 3> widthTargetSing {}, widthTargetGap {};
+        bool hasWidthTarget = false;
     };
     CurveSnapshot getCurves() const;
-    struct Meters { float gr1, gr2, duck, in, out, width; double bpm; float delayMs; uint32_t blocks; float deess; };
+    struct Meters { float gr1, gr2, duck, in, out, width; double bpm; float delayMs; uint32_t blocks; float deess;
+                    std::array<float, 6> widthBands; };   // output side-mid per band: singing low/mid/high, pauses low/mid/high
     Meters getMeters() const;
 
 private:
@@ -76,6 +82,8 @@ private:
     juce::String presetName { "No preset (load a .json)" };
     juce::var presetJson;              // full preset, kept in the session
     bool presetLoaded = false;
+    std::array<float, 3> widthTargetSing {}, widthTargetGap {};   // Suno width per band (for the WIDTH graph)
+    bool hasWidthTarget = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SunoChainProcessor)
 };

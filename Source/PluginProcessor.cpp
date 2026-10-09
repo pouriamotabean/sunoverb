@@ -66,6 +66,51 @@ bool curveFromString (const juce::String& str, std::array<float, sc::kNumBands>&
     return true;
 }
 
+template <size_t N>
+juce::String arrToString (const std::array<float, N>& c)
+{
+    juce::StringArray s;
+    for (auto v : c) s.add (juce::String (v, 3));
+    return s.joinIntoString (",");
+}
+
+template <size_t N>
+bool arrFromString (const juce::String& str, std::array<float, N>& c)
+{
+    auto t = juce::StringArray::fromTokens (str, ",", "");
+    if (t.size() != (int) N) return false;
+    for (size_t i = 0; i < N; ++i) c[i] = t[(int) i].getFloatValue();
+    return true;
+}
+
+// numeric array at a dotted path (exact size), false if missing
+template <size_t N>
+bool numArray (const juce::var& root, const char* path, std::array<float, N>& out)
+{
+    juce::var v = root;
+    for (auto& key : juce::StringArray::fromTokens (path, ".", ""))
+    {
+        if (! v.isObject()) return false;
+        v = v.getProperty (juce::Identifier (key), juce::var());
+    }
+    if (! v.isArray() || v.size() != (int) N) return false;
+    for (size_t i = 0; i < N; ++i)
+    {
+        auto e = v[(int) i];
+        if (! (e.isDouble() || e.isInt() || e.isInt64())) return false;
+        out[i] = (float) (double) e;
+    }
+    return true;
+}
+
+template <size_t N>
+juce::var toVarArray (const std::array<float, N>& a)
+{
+    juce::Array<juce::var> arr;
+    for (auto v : a) arr.add (std::round (v * 100.0f) / 100.0f);
+    return arr;
+}
+
 // value display
 juce::AudioParameterFloatAttributes fmt (int decimals, const juce::String& unit)
 {
@@ -89,22 +134,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
     auto pct = fmt (0, "%"), dB = fmt (1, "dB"), ms = fmt (0, "ms"), sec = fmt (2, "s");
-    // v1 parameters (IDs unchanged so old sessions load); defaults = Suno Lead 01 (v1.1 fit)
+    // v1 parameters (IDs unchanged so old sessions load); defaults = Suno Lead 01 (v1.3 fit)
     p.push_back (std::make_unique<APF> (juce::ParameterID { "amount", 1 }, "Amount", NRange (0, 100), 100.0f, pct));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "output", 1 }, "Output", NRange (-24, 12), 0.0f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "eqAmount", 1 }, "Match EQ", NRange (0, 150), 100.0f, pct));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "eqLow", 1 }, "EQ Low Boost", NRange (0, 100), 35.0f, pct));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "compAmount", 1 }, "Compression", NRange (0, 200), 100.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "deess", 1 }, "De-ess", NRange (0, 200), 100.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "deess", 1 }, "S/Z Match", NRange (0, 200), 100.0f, pct));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "satDrive", 1 }, "Sat Drive", NRange (0, 24), 6.0f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "satMix", 1 }, "Sat Mix", NRange (0, 100), 15.0f, pct));
     p.push_back (std::make_unique<APB> (juce::ParameterID { "revOn", 1 }, "Reverb On", true));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "revLevel", 1 }, "Reverb Level", NRange (-40, 6), -0.4f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "revLevel", 1 }, "Reverb Level", NRange (-40, 6), -4.2f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "predelay", 1 }, "Pre-delay", NRange (0, 500), 205.0f, ms));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "decay", 1 }, "Decay", skewed (0.3f, 10.0f, 2.5f), 4.64f, sec));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "width", 1 }, "Reverb Width", NRange (0, 160), 81.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "duck", 1 }, "Ducking", NRange (0, 24), 13.4f, dB));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "duckRel", 1 }, "Duck Release", skewed (10, 1500, 200), 519.0f, ms));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "width", 1 }, "Reverb Width", NRange (0, 160), 82.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "duck", 1 }, "Ducking", NRange (0, 24), 12.8f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "duckRel", 1 }, "Duck Release", skewed (10, 1500, 200), 383.0f, ms));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "wetHpf", 1 }, "Reverb HPF", skewed (20, 2000, 250), 400.0f, fmtHz()));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "wetLpf", 1 }, "Reverb LPF", skewed (1000, 20000, 5000), 14000.0f, fmtHz()));
     p.push_back (std::make_unique<APB> (juce::ParameterID { "dlyOn", 1 }, "Delay On", false));
@@ -116,9 +161,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     p.push_back (std::make_unique<APC> (juce::ParameterID { "dlyNote", 2 }, "Delay Note", juce::StringArray { "1/4", "1/8 dotted", "1/8", "1/8 triplet", "1/16" }, 2));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "dlyToRev", 2 }, "Delay > Reverb", NRange (0, 100), 50.0f, pct));
     p.push_back (std::make_unique<APB> (juce::ParameterID { "wOn", 2 }, "Vocal Width On", true));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "wLevel", 2 }, "Vocal Width", NRange (-45, -6), -28.8f, dB));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "wTone", 2 }, "Width Tone", NRange (-6, 15), 4.8f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "wLevel", 2 }, "Vocal Width", NRange (-45, -6), -27.9f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "wTone", 2 }, "Width Tone", NRange (-6, 15), 2.6f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "wMotion", 2 }, "Width on Held Notes", NRange (0, 100), 0.0f, pct));
+    // v1.3: multiband width (side gain per band: low < 300 Hz, mid 300 Hz - 4 kHz, high > 4 kHz)
+    auto band = [&] (const char* id, const char* name, float lo, float hi, float def)
+    { p.push_back (std::make_unique<APF> (juce::ParameterID { id, 3 }, name, NRange (lo, hi), def, dB)); };
+    band ("rwLow",  "Reverb Width Low",  -30, 12, -3.56f);
+    band ("rwMid",  "Reverb Width Mid",  -30, 12, 3.15f);
+    band ("rwHigh", "Reverb Width High", -30, 12, -14.5f);
+    band ("lwLow",  "Vocal Width Low",   -40, 18, 13.0f);
+    band ("lwMid",  "Vocal Width Mid",   -40, 18, 0.0f);
+    band ("lwHigh", "Vocal Width High",  -40, 18, 1.6f);
+    band ("dwLow",  "Echo Width Low",    -30, 12, 0.0f);
+    band ("dwMid",  "Echo Width Mid",    -30, 12, 0.0f);
+    band ("dwHigh", "Echo Width High",   -30, 12, 0.0f);
     return { p.begin(), p.end() };
 }
 
@@ -188,6 +245,9 @@ sc::Params SunoChainProcessor::buildParams() const
     p.widthLevelDb = v ("wLevel");
     p.widthTiltDb = v ("wTone");
     p.widthMotion = v ("wMotion") / 100.0f;
+    p.revBandDb   = { v ("rwLow"), v ("rwMid"), v ("rwHigh") };
+    p.layerBandDb = { v ("lwLow"), v ("lwMid"), v ("lwHigh") };
+    p.delayBandDb = { v ("dwLow"), v ("dwMid"), v ("dwHigh") };
     p.bpm = (float) hostBpm.load();
     return p;
 }
@@ -245,6 +305,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
         presetName = json.getProperty ("name", f.getFileNameWithoutExtension()).toString();
         restorePresetFromTree();
     }
+    currentPresetFile = f;
 
     auto set = [this] (const char* id, double value)
     {
@@ -255,20 +316,26 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
     set ("satDrive", num (json, "saturation.drive_db", 6.0));
     set ("satMix", num (json, "saturation.mix", 0.15) * 100.0);
     set ("revOn", num (json, "reverb.on", 1.0));
-    set ("revLevel", num (json, "reverb.level_db", -0.4));
+    set ("revLevel", num (json, "reverb.level_db", -4.2));
     set ("predelay", num (json, "reverb.predelay_ms", 205.0));
     set ("decay", num (json, "reverb.rt60_s", 4.64));
-    set ("width", num (json, "reverb.width", 0.81) * 100.0);
+    set ("width", num (json, "reverb.width", 0.82) * 100.0);
     set ("wetHpf", num (json, "reverb.hpf_hz", 400.0));
     set ("wetLpf", num (json, "reverb.lpf_hz", 14000.0));
-    set ("duck", num (json, "ducking.depth_db", 13.4));
-    set ("duckRel", num (json, "ducking.release_ms", 519.0));
+    set ("duck", num (json, "ducking.depth_db", 12.8));
+    set ("duckRel", num (json, "ducking.release_ms", 383.0));
     if (has (json, "width_layer"))
     {
         set ("wOn", num (json, "width_layer.on", 1.0));
-        set ("wLevel", num (json, "width_layer.level_db", -28.8));
-        set ("wTone", num (json, "width_layer.tilt_db", 4.8));
+        set ("wLevel", num (json, "width_layer.level_db", -27.9));
+        set ("wTone", num (json, "width_layer.tilt_db", 2.6));
         if (has (json, "width_layer.motion")) set ("wMotion", num (json, "width_layer.motion", 0.0) * 100.0);
+    }
+    {   // multiband width (v1.3 presets); older presets: flat (0 dB) = the v1.2 sound
+        std::array<float, 3> rb { 0, 0, 0 }, lb { 0, 0, 0 };
+        numArray (json, "reverb.band_width_db", rb); numArray (json, "width_layer.band_db", lb);
+        set ("rwLow", rb[0]); set ("rwMid", rb[1]); set ("rwHigh", rb[2]);
+        set ("lwLow", lb[0]); set ("lwMid", lb[1]); set ("lwHigh", lb[2]);
     }
     // Delay: only applied when the Suno vocal actually had an echo, or when it is a preset you saved
     // yourself. Otherwise your own delay settings stay as they are.
@@ -281,6 +348,8 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
         set ("dlySync", num (json, "delay.sync", 1.0));
         set ("dlyNote", num (json, "delay.note", 2.0));
         set ("dlyToRev", num (json, "delay.to_reverb", 0.5) * 100.0);
+        std::array<float, 3> db { 0, 0, 0 }; numArray (json, "delay.band_width_db", db);
+        set ("dwLow", db[0]); set ("dwMid", db[1]); set ("dwHigh", db[2]);
     }
     if (has (json, "user.amount"))
     {
@@ -301,7 +370,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         j = juce::JSON::parse (juce::JSON::toString (presetJson.isObject() ? presetJson : juce::var (new juce::DynamicObject())));
         if (! j.isObject()) j = juce::var (new juce::DynamicObject());
         put (j, "format", "SunoChainPreset");
-        put (j, "version", 2);
+        put (j, "version", 3);
         put (j, "name", f.getFileNameWithoutExtension());
         juce::Array<juce::var> curve;
         for (auto v : hidden.targetCurve) curve.add (v);
@@ -309,9 +378,10 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         put (j, "dynamics.target_crest_db", hidden.targetCrestDb);
         put (j, "dynamics.target_spread400_db", hidden.targetSpreadDb);
         put (j, "dynamics.leveler_factor", hidden.levelerFactor);
-        put (j, "deesser.split_hz", hidden.deessFreq);
-        put (j, "deesser.sib_median_db", hidden.deessTargetDb + 3.5f);
-        put (j, "deesser.ratio", hidden.deessRatio);
+        put (j, "deesser.method", "sz_match");
+        put (j, "deesser.sib_curve_db", toVarArray (hidden.sibTarget));
+        put (j, "multiband_width.xover_low_hz", hidden.xoverLowHz);
+        put (j, "multiband_width.xover_high_hz", hidden.xoverHighHz);
         put (j, "reverb.rt60_high_mul", hidden.rt60HighMul);
         put (j, "reverb.bump_hz", hidden.wetBumpHz);
         put (j, "reverb.bump_db", hidden.wetBumpDb);
@@ -342,6 +412,9 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "width_layer.level_db", v ("wLevel"));
     put (j, "width_layer.tilt_db", v ("wTone"));
     put (j, "width_layer.motion", v ("wMotion") / 100.0);
+    put (j, "reverb.band_width_db", toVarArray (std::array<float, 3> { (float) v ("rwLow"), (float) v ("rwMid"), (float) v ("rwHigh") }));
+    put (j, "width_layer.band_db", toVarArray (std::array<float, 3> { (float) v ("lwLow"), (float) v ("lwMid"), (float) v ("lwHigh") }));
+    put (j, "delay.band_width_db", toVarArray (std::array<float, 3> { (float) v ("dwLow"), (float) v ("dwMid"), (float) v ("dwHigh") }));
     put (j, "delay.user_set", true);
     put (j, "delay.on", v ("dlyOn") > 0.5);
     put (j, "delay.level_db", v ("dlyLevel"));
@@ -360,10 +433,11 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         const juce::SpinLock::ScopedLockType sl (presetLock);
         presetJson = j; presetLoaded = true; presetName = f.getFileNameWithoutExtension();
     }
+    currentPresetFile = f;
     return true;
 }
 
-// presetJson -> hidden (lock held by caller). Fallbacks = Suno Lead 01 (v1.1 fit), so v1 presets get the
+// presetJson -> hidden (lock held by caller). Fallbacks = Suno Lead 01 (v1.3 fit), so older presets get the
 // measured width layer and reverb character too.
 void SunoChainProcessor::restorePresetFromTree()
 {
@@ -387,11 +461,24 @@ void SunoChainProcessor::restorePresetFromTree()
     hidden.comp2Ratio     = (float) num (j, "dynamics.comp2.ratio", 4.0);
     hidden.comp2AttackMs  = (float) num (j, "dynamics.comp2.attack_ms", 30.0);
     hidden.comp2ReleaseMs = (float) num (j, "dynamics.comp2.release_ms", 300.0);
-    // v1.2 sibilance balancer: threshold from Suno's sibilant-over-vowel median (older presets: Suno Lead 01 value)
-    hidden.deessFreq      = (float) num (j, "deesser.split_hz", 4000.0);
-    hidden.deessTargetDb  = (float) (num (j, "deesser.sib_median_db", -2.5) - 3.5);
-    hidden.deessRatio     = (float) num (j, "deesser.ratio", 6.0);
-    hidden.deessMaxDb     = (float) num (j, "deesser.max_cut_db", 20.0);
+    // v1.3 S/Z Match: Suno's sibilant spectrum (older presets: the built-in Suno Lead 01 measurement)
+    {
+        std::array<float, 10> sc10 {};
+        hidden.sibTarget = numArray (j, "deesser.sib_curve_db", sc10) ? sc10 : sc::Params().sibTarget;
+        hidden.hasSibTarget = true;
+    }
+    hidden.xoverLowHz     = (float) num (j, "multiband_width.xover_low_hz", 300.0);
+    hidden.xoverHighHz    = (float) num (j, "multiband_width.xover_high_hz", 4000.0);
+    // width targets for the WIDTH graph (Suno, same bands as the meter); built-in = Suno Lead 01
+    widthTargetSing = { -18.95f, -15.75f, -24.27f }; widthTargetGap = { -8.91f, -0.16f, -16.58f };
+    hasWidthTarget = true;
+    if (j.isObject())
+    {
+        std::array<float, 3> a {}, b {};
+        const bool ok = numArray (j, "measurements.suno.width_meter_singing_db", a) && numArray (j, "measurements.suno.width_meter_pauses_db", b);
+        if (ok) { widthTargetSing = a; widthTargetGap = b; }
+        else hasWidthTarget = false;   // a preset without width data (older version): no target shown
+    }
     hidden.delayHpf       = (float) num (j, "delay.hpf_hz", 300.0);
     hidden.delayLpf       = (float) num (j, "delay.lpf_hz", 5000.0);
     hidden.delayPingPong  = num (j, "delay.ping_pong", 1.0) > 0.5;
@@ -410,11 +497,11 @@ void SunoChainProcessor::restorePresetFromTree()
     hidden.wetBumpDb      = (float) num (j, "reverb.bump_db", 4.5);
     hidden.duckAttackMs   = (float) num (j, "ducking.attack_ms", 5.0);
     hidden.widthDelayMs   = (float) num (j, "width_layer.delay_ms", 1.0);
-    hidden.widthShiftHz   = (float) num (j, "width_layer.shift_hz", 1.73);
-    hidden.widthHpf       = (float) num (j, "width_layer.hpf_hz", 156.0);
+    hidden.widthShiftHz   = (float) num (j, "width_layer.shift_hz", 1.51);
+    hidden.widthHpf       = (float) num (j, "width_layer.hpf_hz", 196.0);
     hidden.widthLpf       = (float) num (j, "width_layer.lpf_hz", 16000.0);
-    hidden.widthBloomDb   = (float) num (j, "width_layer.bloom_db", 18.9);
-    hidden.widthBloomMs   = (float) num (j, "width_layer.bloom_ms", 184.0);
+    hidden.widthBloomDb   = (float) num (j, "width_layer.bloom_db", 27.0);
+    hidden.widthBloomMs   = (float) num (j, "width_layer.bloom_ms", 153.0);
 }
 
 juce::String SunoChainProcessor::getPresetName() const { const juce::SpinLock::ScopedLockType sl (presetLock); return presetName; }
@@ -442,9 +529,17 @@ bool SunoChainProcessor::stopLearn (juce::String& message)
         hidden.sourceCrestDb = crest;
         hidden.sourceSpreadDb = spread;
     }
+    std::array<float, 10> sib {};
+    const int nSib = chain.learner.sib.summarise (sib);
+    {
+        const juce::SpinLock::ScopedLockType sl (presetLock);
+        hidden.hasSibSource = nSib >= 3;
+        if (hidden.hasSibSource) hidden.sibSource = sib;
+    }
     dirty = true;
     message = "Learned: level " + juce::String (level, 1) + " dBFS, crest " + juce::String (crest, 1)
-              + " dB, phrase spread " + juce::String (spread, 1) + " dB";
+              + " dB, phrase spread " + juce::String (spread, 1) + " dB, "
+              + (nSib >= 3 ? juce::String (nSib) + " s/z sounds" : juce::String ("too few s/z sounds (learn a longer part for S/Z Match)"));
     return true;
 }
 
@@ -455,6 +550,7 @@ void SunoChainProcessor::clearLearn()
     {
         const juce::SpinLock::ScopedLockType sl (presetLock);
         hidden.hasSource = false; hidden.hasSourceLevel = false; hidden.sourceCrestDb = 0; hidden.sourceSpreadDb = 0;
+        hidden.hasSibSource = false;
     }
     dirty = true;
 }
@@ -468,13 +564,16 @@ SunoChainProcessor::CurveSnapshot SunoChainProcessor::getCurves() const
     s.hasTarget = p.hasTarget; s.hasSource = p.hasSource;
     s.correction = sc::computeCorrection (p);
     s.sourceLevel = p.sourceLevelDb; s.sourceCrest = p.sourceCrestDb; s.targetCrest = p.targetCrestDb;
+    s.widthTargetSing = widthTargetSing; s.widthTargetGap = widthTargetGap; s.hasWidthTarget = hasWidthTarget;
     return s;
 }
 
 SunoChainProcessor::Meters SunoChainProcessor::getMeters() const
 {
-    return { chain.mGr1.load(), chain.mGr2.load(), chain.mDuck.load(), chain.mIn.load(), chain.mOut.load(), chain.mWidth.load(),
-             hostBpm.load(), chain.mDelayMs.load(), chain.mBlocks.load(), chain.mDeess.load() };
+    Meters m { chain.mGr1.load(), chain.mGr2.load(), chain.mDuck.load(), chain.mIn.load(), chain.mOut.load(), chain.mWidth.load(),
+               hostBpm.load(), chain.mDelayMs.load(), chain.mBlocks.load(), chain.mDeess.load(), {} };
+    for (size_t i = 0; i < 6; ++i) m.widthBands[i] = chain.mWidthBands[i].load();
+    return m;
 }
 
 //==============================================================================
@@ -492,6 +591,11 @@ void SunoChainProcessor::getStateInformation (juce::MemoryBlock& destData)
         extra.setProperty ("sourceLevel", hidden.sourceLevelDb, nullptr);
         extra.setProperty ("sourceCrest", hidden.sourceCrestDb, nullptr);
         extra.setProperty ("sourceSpread", hidden.sourceSpreadDb, nullptr);
+        extra.setProperty ("hasSibSource", hidden.hasSibSource, nullptr);
+        extra.setProperty ("advancedOpen", advancedOpen, nullptr);
+        extra.setProperty ("uiScale", uiScale, nullptr);
+        extra.setProperty ("presetFile", currentPresetFile.getFullPathName(), nullptr);
+        extra.setProperty ("sibSource", arrToString (hidden.sibSource), nullptr);
     }
     state.removeChild (state.getChildWithName ("EXTRA"), nullptr);
     state.appendChild (extra, nullptr);
@@ -522,6 +626,14 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
         hidden.sourceLevelDb = (float) (double) extra.getProperty ("sourceLevel", -18.0);
         hidden.sourceCrestDb = hidden.hasSource ? (float) (double) extra.getProperty ("sourceCrest", 0.0) : 0.0f;
         hidden.sourceSpreadDb = hidden.hasSource ? (float) (double) extra.getProperty ("sourceSpread", 0.0) : 0.0f;
+        advancedOpen = (bool) extra.getProperty ("advancedOpen", false);
+        uiScale = juce::jlimit (0.6f, 1.6f, (float) (double) extra.getProperty ("uiScale", 1.0));
+        {
+            const auto pf = extra.getProperty ("presetFile", "").toString();
+            currentPresetFile = juce::File::isAbsolutePath (pf) ? juce::File (pf) : juce::File();
+        }
+        hidden.hasSibSource = hidden.hasSource && (bool) extra.getProperty ("hasSibSource", false)
+                              && arrFromString (extra.getProperty ("sibSource", "").toString(), hidden.sibSource);
     }
     dirty = true;
 }
