@@ -1,4 +1,4 @@
-# Suno Chain v1.8
+# Suno Chain v1.9
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -6,6 +6,11 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
 1. Replace the `Source/` folder in the repo with the one from this zip (`CMakeLists.txt` and `.github/workflows/build.yml` have not changed since the VS2026 fix; replacing everything is fine too).
 2. Push → **Actions** → when it's green, download **SunoChain-VST3** → copy it to `C:\Program Files\Common Files\VST3` → rescan in Cubase.
 3. If it's red, send me the log.
+
+## New in v1.9 (S/Z fix)
+- **The v1.8 "sibilant ceiling" is switched off.** In the plugin it pulled s/sh/ch 3-10 dB down (the 2-5 kHz body of "sh/ch" up to 9 dB), so words lost their consonants. The voiced-z detector from v1.8 is off too. S/Z is back to the v1.7 behaviour you found fine.
+- **New safety rule for S/Z Match**: it may only take back what the Match EQ added. A sibilant can end up as bright as Suno's, but **never darker than you sang it** (the old allowance of 3 dB below your raw "s" is gone).
+- Match Loudness (v1.8) stays.
 
 ## New in v1.8 (sibilant ceiling + Match Loudness)
 - **Sibilant ceiling**: S/Z Match treats all your "s/z" with one learned curve; now each single sibilant is also checked: if the chain raised its hiss (relative to the vowel before it) more than it raised your other sibilants (+1 dB), just that one is pulled back. Your "z" at 0:13 went from +3.1 dB to +0.5 dB; the overall "s" level stays at Suno's (-6.4). Shown on the S/Z meter.

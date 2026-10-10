@@ -1,6 +1,7 @@
 # Suno Chain – Roadmap
 
 **Done in v1.2:** S/Z balance (EQ no longer makes "s"/"z" ~10 dB louder), de-ess meter, compression calibrated on an uncompressed vocal.
+**Done in v1.9:** sibilant ceiling off (it ate s/sh/ch), S/Z never darker than the raw voice. Open: the voiced "z" (+3 dB) needs a fix that is verified in the real plugin, not only offline.
 **Done in v1.8:** per-sibilant ceiling (single loud s/z), voiced z detection, **Match Loudness (stage 3)**.
 **Done in v1.7:** natural vocal compressor (always on, no look-ahead, holds on consonants/breaths, Punch removed, Attack knob), per-band S/Z Match (keeps the "s" air).
 **Done in v1.5:** reverb detune fix, level-based S/Z Match, closed-loop EQ in Learn, +15 dB air limit, Punch + leveler recalibration, relative ducking, Advanced Dynamics (Peak/Leveler/Speed/Punch), branding "BY POURIA MOTABEAN".
