@@ -55,6 +55,7 @@ struct Params
     float punch = 1.5f;             // unused since v1.7 (the onset shaper made z/ch/j jump); kept for old presets
     // v1.5 Advanced Dynamics (1 = as learned / preset): peak compressor amount, leveler strength, leveler speed
     float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f, attackScale = 1.0f;
+    bool sibCeiling = false, deessRelDetect = false;   // v1.8 experiments, OFF since v1.9 (they ate s/sh/ch in the plugin)
     float loudGainDb = 0.0f;        // v1.8 Match Loudness: held makeup (dB), set by the MATCH button
     float freezeHfDb = -18.0f, voicedShare = 0.55f, optoFastRelMs = 150.0f, optoSlowRelMs = 1200.0f, optoThrDb = -10.0f, optoRatioPer = 2.0f;   // v1.7 compressor tuning   // v1.7: attackScale (opto attack)
     float comp2Ratio = 3.0f, comp2AttackMs = 30.0f, comp2ReleaseMs = 300.0f;   // ratio = max ratio for the leveler
@@ -411,7 +412,7 @@ struct DeEsser
     // the compressors pull vowels down more than the quieter sibilants; on a sibilant the S/Z Match also
     // applies the gain reduction the preceding vowel had, so the "s" keeps its Suno level over the vowel
     float vowelGainDb = 0, compLift = 0, liftTarget = 0, liftG = 1;
-    float vowelRefDb = -200.0f, detRelLo = -14.0f;   // v1.8: high band relative to the last vowel (catches voiced z / j)
+    float vowelRefDb = -200.0f, detRelLo = -14.0f; bool relDetect = false;   // v1.8: high band relative to the last vowel (catches voiced z / j)
 
     void prepare (double fs)
     {
@@ -447,7 +448,7 @@ struct DeEsser
         const float wShare = voiced ? std::clamp ((shareDb - detLo) / detSpan, 0.0f, 1.0f) : 0.0f;
         // a voiced "z" / "j" carries its vowel-like buzz, so its high-band SHARE stays low even when its hiss is
         // as loud as an "s": also look at the hiss level against the vowel before it (vowels stay below ~-16 dB)
-        const float wRel = (voiced && shareDb > detLo - 4.0f && vowelRefDb > -150.0f)
+        const float wRel = (relDetect && voiced && shareDb > detLo - 4.0f && vowelRefDb > -150.0f)
                                ? std::clamp ((hfDb - vowelRefDb - detRelLo) / detSpan, 0.0f, 1.0f) : 0.0f;
         const float w = std::max (wShare, wRel);
         if (voiced && shareDb < detLo - 6.0f) vowelRefDb = vowelRefDb < -150.0f ? fullDb : 0.99f * vowelRefDb + 0.01f * fullDb;
@@ -1317,7 +1318,9 @@ public:
                     float sm = ex[(size_t) b] * 2, w = 2;
                     if (b > f0) { sm += ex[(size_t) b - 1]; w += 1; }
                     if (b < kNumBands - 1) { sm += ex[(size_t) b + 1]; w += 1; }
-                    d[(size_t) b] = std::clamp (amt * sm / w, 0.0f, delta[(size_t) b]);
+                    // v1.9 safety: never more than the EQ lift itself (the old +3 dB below your raw "s" is gone):
+                    // a sibilant can end up as bright as Suno's, but never darker than you sang it
+                    d[(size_t) b] = std::clamp (amt * sm / w, 0.0f, std::max (0.0f, u[(size_t) b]));
                 }
                 const double lPost = sumDb (post0), lTarget = sumDb ([&] (int b) { return (double) p.sibTarget[(size_t) (b - f0)]; });
                 const double lAfter = sumDb ([&] (int b) { return post0 (b) - d[(size_t) b]; });
@@ -1334,7 +1337,7 @@ public:
             sibAlpha = alpha;
             if (delta != lastSibDelta || ! sibValid) { deess.setDelta (delta, fs); lastSibDelta = delta; sibValid = true; }
         }
-        deess.amount = 1.0f; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
+        deess.amount = 1.0f; deess.relDetect = p.deessRelDetect; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
         satDrive = dbToGain (p.satDriveDb); satMix = p.satMix * amt;
 
         delay.set (p.delayHpf, p.delayLpf);
@@ -1398,7 +1401,8 @@ public:
             maxGr1 = std::max (maxGr1, vc.grDb()); maxGr2 = std::max (maxGr2, c2.gr);
             l = laOutL * g1 * g2; r = laOutR * g1 * g2;
             deess.apply (l, r);
-            sibCeil.process (laRaw.read (lookahead - 1), l, r, deess.k, ! consonant && ! pause, std::clamp (p.deessAmount, 0.0f, 2.0f));
+            if (p.sibCeiling) sibCeil.process (laRaw.read (lookahead - 1), l, r, deess.k, ! consonant && ! pause, std::clamp (p.deessAmount, 0.0f, 2.0f));
+            else sibCeil.cutDb = 0;
             maxDs = std::max (maxDs, deess.currentCut() + sibCeil.cutDb);
             if (satMix > 0)
             {
