@@ -432,7 +432,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     setLookAndFeel (&lnf);
     setOpaque (true);
     addAndMakeVisible (display); addAndMakeVisible (meters); addAndMakeVisible (pill);
-    for (auto* b : { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB, &matchB }) addAndMakeVisible (*b);
+    for (auto* b : { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB, &matchB, &listenB }) addAndMakeVisible (*b);
     eqTab.underlineWhenOn = widthTab.underlineWhenOn = true;
     eqTab.setToggleState (true, juce::dontSendNotification);
     eqTab.onClick = [this] { display.setMode (0); eqTab.setToggleState (true, juce::dontSendNotification); widthTab.setToggleState (false, juce::dontSendNotification); };
@@ -443,6 +443,8 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     clearB.onClick = [this] { proc.clearLearn(); statusText = "Learned voice cleared."; };
     advancedB.onClick = [this] { setAdvanced (! proc.advancedOpen); };
     matchB.onClick = [this] { toggleLoudMatch(); };
+    listenB.onClick = [this] { proc.listenMode = (proc.listenMode.load() + 1) % 3; proc.markDirty(); };
+    listenB.setTooltip ("LISTEN: ALL = normal, WET = reverb + echo only (with the ducking), WIDTH = width layer only. Not saved.");
     matchB.setTooltip ("Measures your output while you play, then holds the gain that matches the Suno vocal's loudness");
     pill.onPrev = [this] { stepPreset (-1); };
     pill.onNext = [this] { stepPreset (1); };
@@ -461,7 +463,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     // main controls
     addKnob ("amount", "Amount", 150, false, true);
     addKnob ("eqAmount", "Match EQ", 64); addKnob ("compAmount", "Compression", 64);
-    addKnob ("deess", "S/Z", 64);         addKnob ("satMix", "Saturation", 64);
+    addKnob ("deess", "S/Z", 64);         addKnob ("harm", "Saturation", 64);
     addKnob ("revLevel", "Level", 64);    addKnob ("decay", "Decay", 64);
     addKnob ("predelay", "Pre-delay", 64); addKnob ("duck", "Ducking", 64);
     addKnob ("wLevel", "Width", 64, true); addKnob ("wTone", "Tone", 64, true); addKnob ("wMotion", "Held Notes", 64, true);
@@ -469,7 +471,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     // Advanced drawer
     struct D { const char* id; const char* name; bool violet; };
     for (const auto& d : std::vector<D> {
-            { "eqLow", "Low Boost", false }, { "satDrive", "Sat Drive", false }, { "loudGain", "Loudness", false }, { "output", "Output", false },
+            { "eqLow", "Low Boost", false }, { "air", "Air", false }, { "loudGain", "Loudness", false }, { "output", "Output", false },
             { "dynPeak", "Peak", false }, { "dynLeveler", "Leveler", false }, { "dynSpeed", "Speed", false }, { "dynPunch", "Attack", false },
             { "width", "Width", false }, { "wetHpf", "HPF", false }, { "wetLpf", "LPF", false }, { "duckRel", "Duck Rel", false },
             { "rwLow", "Low", false }, { "rwMid", "Mid", false }, { "rwHigh", "High", false },
@@ -480,7 +482,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
         drawerIds.push_back (d.id);
     }
 
-    for (auto id : { "rwLow", "rwMid", "rwHigh", "lwLow", "lwMid", "lwHigh", "dwLow", "dwMid", "dwHigh", "output", "wTone", "loudGain" })
+    for (auto id : { "rwLow", "rwMid", "rwHigh", "lwLow", "lwMid", "lwHigh", "dwLow", "dwMid", "dwHigh", "output", "wTone", "loudGain", "air" })
         knobs[id]->slider.getProperties().set ("bipolar", true);
     revLamp.colour = echoLamp.colour = col::amber; widthLamp.colour = col::violet;
     for (auto* l : { &revLamp, &widthLamp, &echoLamp }) addAndMakeVisible (*l);
@@ -569,7 +571,7 @@ void Root::paint (juce::Graphics& g)
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
         drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.9", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v1.11", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
     }
     // section titles
     drawCaps (g, "Tone", { 70, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
@@ -613,7 +615,7 @@ void Root::resized()
     // columns: Tone 48-344, Space 344-599, Width 599-854, Echo 854-1150 (the faceplate's dividers)
     const float r1 = 530, r2 = 660;
     placeKnob ("eqAmount", 137, r1, 64); placeKnob ("compAmount", 255, r1, 64);
-    placeKnob ("deess", 137, r2, 64);    placeKnob ("satMix", 255, r2, 64);
+    placeKnob ("deess", 137, r2, 64);    placeKnob ("harm", 255, r2, 64);
     placeKnob ("revLevel", 420, r1, 64); placeKnob ("decay", 523, r1, 64);
     placeKnob ("predelay", 420, r2, 64); placeKnob ("duck", 523, r2, 64);
     placeKnob ("wLevel", 676, r1, 64);   placeKnob ("wTone", 777, r1, 64);
@@ -627,14 +629,15 @@ void Root::resized()
     echoLamp.setBounds (910, 441, 20, 20);
     delayInfo.setBounds (940, 442, 192, 18);
 
-    status.setBounds (120, 742, 600, 20);
+    status.setBounds (120, 742, 470, 20);
+    listenB.setBounds (600, 738, 140, 28);
     matchB.setBounds (742, 738, 200, 28);
     advancedB.setBounds (960, 738, 140, 28);
 
     // Advanced side module (x 1200-1680): columns and rows inside its four sections
     const float c[4] { kW + 80.0f, kW + 180.0f, kW + 280.0f, kW + 380.0f };
     const int ks = 40;
-    placeKnob ("eqLow", c[0], 64, ks); placeKnob ("satDrive", c[1], 64, ks); placeKnob ("loudGain", c[2], 64, ks); placeKnob ("output", c[3], 64, ks);
+    placeKnob ("eqLow", c[0], 64, ks); placeKnob ("air", c[1], 64, ks); placeKnob ("loudGain", c[2], 64, ks); placeKnob ("output", c[3], 64, ks);
     placeKnob ("dynPeak", c[0], 144, ks); placeKnob ("dynLeveler", c[1], 144, ks); placeKnob ("dynSpeed", c[2], 144, ks); placeKnob ("dynPunch", c[3], 144, ks);
     placeKnob ("width", c[0], kSec[1] + 62, ks); placeKnob ("wetHpf", c[1], kSec[1] + 62, ks); placeKnob ("wetLpf", c[2], kSec[1] + 62, ks); placeKnob ("duckRel", c[3], kSec[1] + 62, ks);
     placeKnob ("rwLow", c[0], kSec[1] + 140, ks); placeKnob ("rwMid", c[1], kSec[1] + 140, ks); placeKnob ("rwHigh", c[2], kSec[1] + 140, ks);
@@ -651,6 +654,13 @@ void Root::tick()
     learnB.recording = learning;
     if (learning) learnB.repaint();
     if (! learning && statusText.startsWith ("Learning")) { juce::String msg; proc.stopLearn (msg); statusText = msg; }
+    {   // LISTEN: blinks while soloing so a bounce is never made by accident
+        const int lm = proc.listenMode.load();
+        const juce::String t = lm == 1 ? "LISTEN  WET" : lm == 2 ? "LISTEN  WIDTH" : "LISTEN  ALL";
+        if (listenB.getButtonText() != t) listenB.setButtonText (t);
+        listenB.recording = lm != 0; listenB.setToggleState (lm != 0, juce::dontSendNotification);
+        if (lm != 0) listenB.repaint();
+    }
     {   // MATCH LOUDNESS: lamp + seconds while measuring, then the held gain
         const bool matching = proc.isLoudMatching();
         const float lg = proc.apvts.getRawParameterValue ("loudGain")->load();

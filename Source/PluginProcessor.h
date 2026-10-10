@@ -61,6 +61,8 @@ public:
     bool stopLoudMatch (juce::String& message);
     bool isLoudMatching() const { return chain.loud.active.load(); }
     double loudSeconds() const { return chain.loud.seconds(); }
+    std::atomic<int> listenMode { 0 };   // LISTEN (editor only, not saved)
+    void markDirty() { dirty = true; }
     float getTargetLufs() const { const juce::SpinLock::ScopedLockType sl (presetLock); return targetLufs; }
 
     // for the editor (message thread)

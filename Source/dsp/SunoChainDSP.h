@@ -56,6 +56,8 @@ struct Params
     // v1.5 Advanced Dynamics (1 = as learned / preset): peak compressor amount, leveler strength, leveler speed
     float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f, attackScale = 1.0f;
     bool sibCeiling = false, deessRelDetect = false;   // v1.8 experiments, OFF since v1.9 (they ate s/sh/ch in the plugin)
+    float excAmount = 1.0f, excAdb = 6.0f, excBdb = 8.0f, airDb = 0.0f;   // v1.11 harmonic exciter (amount 1 = fitted to Suno)
+    int listenMode = 0;             // v1.10 LISTEN: 0 all, 1 wet only (reverb + echo, ducked), 2 width layer only; never saved
     float loudGainDb = 0.0f;        // v1.8 Match Loudness: held makeup (dB), set by the MATCH button
     float freezeHfDb = -18.0f, voicedShare = 0.55f, optoFastRelMs = 150.0f, optoSlowRelMs = 1200.0f, optoThrDb = -10.0f, optoRatioPer = 2.0f;   // v1.7 compressor tuning   // v1.7: attackScale (opto attack)
     float comp2Ratio = 3.0f, comp2AttackMs = 30.0f, comp2ReleaseMs = 300.0f;   // ratio = max ratio for the leveler
@@ -1007,19 +1009,20 @@ struct SibCeiling
 struct LoudnessMeter
 {
     Biquad shelf, hp; std::vector<float> sub; double acc = 0; int count = 0, subLen = 4800;
-    std::atomic<bool> active { false }; std::atomic<int> nSub { 0 };
+    std::atomic<bool> active { false }; std::atomic<int> nSub { 0 }; std::atomic<float> peak { 0 };
     void prepare (double fs, double maxSeconds = 300.0)
     {
         shelf.reset(); hp.reset(); shelf.setHighShelf (fs, 1681.97, 4.0, 0.7072); hp.setHPF (fs, 38.135, 0.5003);
         subLen = std::max (1, (int) std::round (0.1 * fs)); sub.assign ((size_t) (maxSeconds * 10), 0.0f); acc = 0; count = 0;
     }
-    void start() { acc = 0; count = 0; nSub = 0; active = true; }
+    void start() { acc = 0; count = 0; nSub = 0; peak = 0; active = true; }
     void stop() { active = false; }
     inline void push (float l, float r)
     {
         if (! active.load (std::memory_order_relaxed)) return;
         const float a = hp.process (shelf.process (l, 0), 0), b = hp.process (shelf.process (r, 1), 1);
         acc += (double) a * a + (double) b * b;
+        const float pk = std::max (std::abs (l), std::abs (r)); if (pk > peak.load (std::memory_order_relaxed)) peak.store (pk, std::memory_order_relaxed);
         if (++count >= subLen)
         {
             const int k = nSub.load();
@@ -1040,6 +1043,35 @@ struct LoudnessMeter
         const double rel = lufs (s / c) - 10; s = 0; c = 0;
         for (double z : blk) if (lufs (z) > -70 && lufs (z) > rel) { s += z; ++c; }
         return c > 0 ? (float) lufs (s / c) : -100.0f;
+    }
+};
+
+//==============================================================================
+// Harmonic exciter (v1.11, replaces the broadband tanh saturation). Suno's vowels carry ~2 dB more harmonic
+// (tonal) energy at 4-8 kHz and ~3-4 dB more "air" at 10-16 kHz than your voice after the Match EQ. Two bands
+// of the voice are run through Chebyshev shapers (T2 + T3: octave and octave + fifth of what goes in), on a
+// level-normalised signal so the amount does not depend on how loud you sing:
+//   band A 2-4.5 kHz -> new harmonics 4.5-10 kHz (presence / "harmonic" top)
+//   band B 5-8 kHz   -> new harmonics 9-18 kHz (air)
+// A sung note is periodic, so any shaping of it only produces harmonics of the sung note itself: nothing out
+// of key can appear. The exciter is gated off on s/z/sh/ch/t/k and breaths (noise would only become more noise).
+struct ExciterBand
+{
+    Biquad inHp, inLp, inHp2, inLp2, outHp, outHp2, outLp; float env[2] { 0, 0 }, envC = 0;
+    void prepare (double fs, double lo, double hi, double outLo, double outHi)
+    {
+        for (auto* b : { &inHp, &inLp, &inHp2, &inLp2, &outHp, &outHp2, &outLp }) b->reset();
+        inHp.setHPF (fs, lo); inHp2.setHPF (fs, lo); inLp.setLPF (fs, hi); inLp2.setLPF (fs, hi);
+        outHp.setHPF (fs, outLo); outHp2.setHPF (fs, outLo); outLp.setLPF (fs, std::min (outHi, fs * 0.45));
+        env[0] = env[1] = 0; envC = msToCoef (3.0f, fs);
+    }
+    inline float process (float x, int ch, float g2, float g3)
+    {
+        const float y = inLp2.process (inLp.process (inHp2.process (inHp.process (x, ch), ch), ch), ch);
+        env[ch] = envC * env[ch] + (1 - envC) * y * y;
+        const float a = std::sqrt (env[ch]) * 1.41421f + 1e-7f, xn = std::clamp (y / a, -1.0f, 1.0f);
+        const float h = (g2 * (2 * xn * xn - 1) + g3 * (4 * xn * xn * xn - 3 * xn)) * a;
+        return outLp.process (outHp2.process (outHp.process (h, ch), ch), ch);
     }
 };
 
@@ -1182,6 +1214,7 @@ public:
     Biquad voiceLp1, voiceLp2, voiceHp1, voiceHp2; float vAll = 0, vLow = 0, vHigh = 0, vCoef = 0;   // voicing gate (v1.7)
     DeEsser deess;
     SibCeiling sibCeil; DelayLine laRaw;
+    ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
     StereoDelay delay;
     FDNReverb rev;
     MicroWidth widthLayer;
@@ -1214,6 +1247,7 @@ public:
         fs = sampleRate;
         lookahead = (int) std::round (0.005 * fs);
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs);
+        excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs);
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
         voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
@@ -1338,7 +1372,9 @@ public:
             if (delta != lastSibDelta || ! sibValid) { deess.setDelta (delta, fs); lastSibDelta = delta; sibValid = true; }
         }
         deess.amount = 1.0f; deess.relDetect = p.deessRelDetect; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
-        satDrive = dbToGain (p.satDriveDb); satMix = p.satMix * amt;
+        satDrive = dbToGain (p.satDriveDb); satMix = 0.0f;   // v1.11: the tanh saturation is replaced by the harmonic exciter
+        excGainA = std::max (0.0f, p.excAmount) * amt * dbToGain (p.excAdb);
+        excGainB = std::max (0.0f, p.excAmount) * amt * dbToGain (p.excBdb + p.airDb);
 
         delay.set (p.delayHpf, p.delayLpf);
         delayGain = (p.delayOn && amt > 0) ? dbToGain (p.delayLevelDb) * amt : 0.0f;
@@ -1404,6 +1440,14 @@ public:
             if (p.sibCeiling) sibCeil.process (laRaw.read (lookahead - 1), l, r, deess.k, ! consonant && ! pause, std::clamp (p.deessAmount, 0.0f, 2.0f));
             else sibCeil.cutDb = 0;
             maxDs = std::max (maxDs, deess.currentCut() + sibCeil.cutDb);
+            if (excGainA > 0 || excGainB > 0)
+            {   // gate: off on consonants / breaths (S/Z detector weight and the unvoiced flag)
+                const float gt = 1.0f - std::min (1.0f, 1.5f * deess.k);   // S/Z detector (before the EQ): reliable on bright vowels too
+                excGate = excGateC * excGate + (1 - excGateC) * gt;
+                const float al = excA.process (l, 0, 0.7f, 0.3f) * excGainA + excB.process (l, 0, 0.7f, 0.3f) * excGainB;
+                const float ar = excA.process (r, 1, 0.7f, 0.3f) * excGainA + excB.process (r, 1, 0.7f, 0.3f) * excGainB;
+                l += al * excGate; r += ar * excGate;
+            }
             if (satMix > 0)
             {
                 float sl = std::tanh (l * satDrive) / satDrive, sr = std::tanh (r * satDrive) / satDrive;
@@ -1443,7 +1487,9 @@ public:
             duckGr = target > duckGr ? duckAtk * duckGr + (1 - duckAtk) * target : duckRel * duckGr + (1 - duckRel) * target;
             maxDuck = std::max (maxDuck, duckGr);
             float dg = dbToGain (-duckGr);
-            l += wl * dg + ws; r += wr * dg - ws;
+            if (p.listenMode == 1)      { l = wl * dg; r = wr * dg; }   // LISTEN WET: reverb + echo only, after the ducking
+            else if (p.listenMode == 2) { l = ws; r = -ws; }            // LISTEN WIDTH: the width layer only (side)
+            else { l += wl * dg + ws; r += wr * dg - ws; }
             widthMeter.push (l, r);   // before the output gain: ratios only
             loud.push (l * restoreGain, r * restoreGain);
             L[i] = l * outGain;

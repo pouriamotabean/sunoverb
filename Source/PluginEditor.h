@@ -131,7 +131,7 @@ private:
     Meters meters;
     PresetPill pill;
     TextLink loadB { "LOAD" }, saveB { "SAVE" }, learnB { "LEARN" }, clearB { "CLEAR" };
-    TextLink eqTab { "EQ", 11.0f }, widthTab { "WIDTH", 11.0f }, advancedB { "ADVANCED  +", 11.0f }, matchB { "MATCH LOUDNESS", 11.0f };
+    TextLink eqTab { "EQ", 11.0f }, widthTab { "WIDTH", 11.0f }, advancedB { "ADVANCED  +", 11.0f }, matchB { "MATCH LOUDNESS", 11.0f }, listenB { "LISTEN  ALL", 11.0f };
     Lamp revLamp, widthLamp, echoLamp;
     PushLamp syncB;
     juce::ComboBox noteBox;

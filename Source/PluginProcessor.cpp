@@ -182,6 +182,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
         p.push_back (std::make_unique<APF> (juce::ParameterID { id, 4 }, name, NRange (0, 200), 100.0f, pct));
     // v1.8: Match Loudness gain (set by the MATCH LOUDNESS button, then held; adjustable)
     p.push_back (std::make_unique<APF> (juce::ParameterID { "loudGain", 5 }, "Loudness Match", NRange (-24, 24), 0.0f, dB));
+    // v1.11: harmonic exciter (replaces the tanh saturation): amount (100 % = fitted to Suno) and air tilt
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "harm", 6 }, "Harmonics", NRange (0, 200), 100.0f, pct));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "air", 6 }, "Air", NRange (-12, 12), 0.0f, dB));
     return { p.begin(), p.end() };
 }
 
@@ -259,6 +262,8 @@ sc::Params SunoChainProcessor::buildParams() const
     p.punch = 0.0f;                                            // v1.7: onset shaper removed
     p.attackScale = juce::jmax (0.25f, v ("dynPunch") / 100.0f);   // 100 % = 10 ms
     p.loudGainDb = v ("loudGain");
+    p.excAmount = v ("harm") / 100.0f; p.airDb = v ("air");
+    p.listenMode = listenMode.load();
     p.bpm = (float) hostBpm.load();
     return p;
 }
@@ -370,6 +375,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
     }
     set ("dynPeak", num (json, "user.dyn_peak", 100.0)); set ("dynLeveler", num (json, "user.dyn_leveler", 100.0));
     set ("dynSpeed", num (json, "user.dyn_speed", 100.0)); set ("dynPunch", num (json, "user.dyn_punch", 100.0));
+        set ("harm", num (json, "user.harmonics", 100.0)); set ("air", num (json, "user.air_db", 0.0));
     dirty = true;
     return true;
 }
@@ -445,6 +451,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "user.deess", v ("deess"));
     put (j, "user.dyn_peak", v ("dynPeak")); put (j, "user.dyn_leveler", v ("dynLeveler"));
     put (j, "user.dyn_speed", v ("dynSpeed")); put (j, "user.dyn_punch", v ("dynPunch"));
+    put (j, "user.harmonics", v ("harm")); put (j, "user.air_db", v ("air"));
     if (! f.replaceWithText (juce::JSON::toString (j, false))) { error = "Could not write " + f.getFullPathName(); return false; }
     {
         const juce::SpinLock::ScopedLockType sl (presetLock);
@@ -589,10 +596,15 @@ bool SunoChainProcessor::stopLoudMatch (juce::String& message)
         return false;
     }
     const float target = getTargetLufs();
-    const float gain = juce::jlimit (-24.0f, 24.0f, target - measured);   // measured before this gain: absolute, not added
+    float gain = juce::jlimit (-24.0f, 24.0f, target - measured);   // measured before this gain: absolute, not added
+    // v1.10: never push the loudest peak over -1 dBFS (the Suno stems are mastered loud)
+    const float peakDb = juce::Decibels::gainToDecibels (chain.loud.peak.load(), -100.0f);
+    const bool capped = peakDb > -100.0f && peakDb + gain > -1.0f;
+    if (capped) gain = -1.0f - peakDb;
     if (auto* prm = apvts.getParameter ("loudGain")) prm->setValueNotifyingHost (prm->convertTo0to1 (gain));
     message = "Loudness: measured " + juce::String (measured, 1) + " LUFS, Suno " + juce::String (target, 1)
-              + " LUFS -> " + (gain >= 0 ? "+" : "") + juce::String (gain, 1) + " dB, held.";
+              + " LUFS -> " + (gain >= 0 ? "+" : "") + juce::String (gain, 1) + " dB, held"
+              + (capped ? " (limited so peaks stay under -1 dBFS)." : ".");
     return true;
 }
 
