@@ -52,9 +52,10 @@ struct Params
     float sourceSpreadDb = 0.0f;    // from Learn (0 = unknown)
     float comp1Ratio = 4.0f, comp1AttackMs = 2.0f, comp1ReleaseMs = 50.0f, comp1Share = 0.55f;
     bool  comp1Punch = true;        // v1.5: comp 1 without look-ahead (onsets pass)
-    float punch = 1.5f;             // v1.5: transient emphasis on syllable onsets, fitted so onsets stand out like Suno's
+    float punch = 1.5f;             // unused since v1.7 (the onset shaper made z/ch/j jump); kept for old presets
     // v1.5 Advanced Dynamics (1 = as learned / preset): peak compressor amount, leveler strength, leveler speed
-    float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f;
+    float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f, attackScale = 1.0f;
+    float freezeHfDb = -18.0f, voicedShare = 0.55f, optoFastRelMs = 150.0f, optoSlowRelMs = 1200.0f, optoThrDb = -10.0f, optoRatioPer = 2.0f;   // v1.7 compressor tuning   // v1.7: attackScale (opto attack)
     float comp2Ratio = 3.0f, comp2AttackMs = 30.0f, comp2ReleaseMs = 300.0f;   // ratio = max ratio for the leveler
     float levelerFactor = 2.1f;     // calibration: nominal ratio needed per unit of spread excess (v1.5: 2.1 with Punch on)
     float compAmount = 1.0f;
@@ -884,6 +885,55 @@ struct Learner
 };
 
 //==============================================================================
+// Natural vocal compressor (v1.7), modelled on the classic vocal chain instead of a Suno-only fit:
+//  - opto stage (LA-2A-like): RMS detector with a 120 Hz side-chain high-pass, ~10 ms attack, two-stage
+//    release (fast 60 ms part + slow ~1.2 s part, so short dips recover quickly but the glue stays), soft knee;
+//  - peak stage (1176-like, gentle): only catches spikes well above the average;
+//  - no look-ahead: the gain never drops before a syllable starts (no "eaten" heads);
+//  - frozen on sibilants / affricates (s, z, sh, ch, j: detected on the raw voice by the S/Z detector):
+//    consonants pass at the gain of the vowel around them, so they neither jump up nor get squashed.
+struct VocalComp
+{
+    Biquad sc; double fs = 48000;
+    float env = 0, envC = 0, thr = -16.0f, ratio = 3.0f, knee = 8.0f, atk = 0, relF = 0, relS = 0, grF = 0, grS = 0;
+    float pEnv = 0, pRelEnv = 0, pThr = -8.0f, pRatio = 4.0f, pAtk = 0, pRel = 0, pGr = 0, makeup = 1.0f;
+    void prepare (double s) { fs = s; sc.reset(); sc.setHPF (fs, 120.0); env = pEnv = 0; grF = grS = pGr = 0; envC = msToCoef (5.0f, fs); pRelEnv = msToCoef (20.0f, fs); }
+    void set (float threshold, float r, float attackMs, float releaseScale, float peakThr, float peakRatio, float makeupDb, float fastMs = 60.0f, float slowMs = 1200.0f)
+    {
+        thr = threshold; ratio = std::max (1.0f, r); pThr = peakThr; pRatio = std::max (1.0f, peakRatio);
+        atk = msToCoef (std::max (0.5f, attackMs), fs);
+        relF = msToCoef (fastMs * releaseScale, fs); relS = msToCoef (slowMs * releaseScale, fs);
+        pAtk = msToCoef (1.0f, fs); pRel = msToCoef (80.0f * releaseScale, fs); makeup = dbToGain (makeupDb);
+    }
+    static float curve (float over, float ratio, float knee)
+    {
+        if (ratio <= 1.0f) return 0.0f;
+        if (2 * over < -knee) return 0.0f;
+        if (2 * std::abs (over) <= knee) { const float t = over + knee / 2; return (1 - 1 / ratio) * t * t / (2 * knee); }
+        return (1 - 1 / ratio) * over;
+    }
+    // m = mono signal at the output time; freeze = consonant or pause: hold the gain
+    inline float process (float m, bool freeze)
+    {
+        const float x = sc.process (m, 0);
+        env = envC * env + (1 - envC) * x * x;
+        const float am = std::abs (m);
+        pEnv = am > pEnv ? am : pRelEnv * pEnv + (1 - pRelEnv) * am;
+        if (! freeze)
+        {
+            const float target = curve (10 * std::log10 (env + 1e-12f) - thr, ratio, knee);
+            auto follow = [] (float g, float t, float a, float r) { return t > g ? a * g + (1 - a) * t : r * g + (1 - r) * t; };
+            grF = follow (grF, target, atk, relF);
+            grS = follow (grS, target, atk, relS);
+            const float pt = curve (gainToDb (pEnv) - pThr, pRatio, 4.0f);
+            pGr = follow (pGr, pt, pAtk, pRel);
+        }
+        return dbToGain (-(0.5f * (grF + grS) + pGr)) * makeup;
+    }
+    float grDb() const { return 0.5f * (grF + grS) + pGr; }
+};
+
+//==============================================================================
 // Width meter: side-minus-mid per band (low 100-300 Hz, mid 400-3000 Hz, high 5-12 kHz), separately while
 // singing and in the pauses. It classifies time exactly like the preset analyzer (singing = mid 12 dB above
 // side and within 30 dB of the loud parts; pause = 60-400 ms after a phrase of >= 400 ms, if the pause lasts
@@ -1016,7 +1066,10 @@ class Chain
 public:
     Params p;
     MatchEQ eq;
-    Compressor c1, c2;
+    Compressor c1, c2;   // c2 = slow phrase leveler; c1 unused since v1.7
+    VocalComp vc;
+    int freezeHold = 0, freezeHoldLen = 0;
+    Biquad voiceLp1, voiceLp2, voiceHp1, voiceHp2; float vAll = 0, vLow = 0, vHigh = 0, vCoef = 0;   // voicing gate (v1.7)
     DeEsser deess;
     StereoDelay delay;
     FDNReverb rev;
@@ -1028,7 +1081,7 @@ public:
     DelayLine laL, laR;                       // lookahead for the compressors
     int lookahead = 0;
     float duckEnv = 0, duckGr = 0, duckEnvCoef = 0, duckAtk = 0, duckRel = 0, phraseRef = -100, phraseDecay = 0;
-    float rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
+    float freezeHf = 0.063f, rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
     float trFast = 0, trSlow = 0, trFa = 0, trFr = 0, trSa = 0, trSr = 0, trGainDb = 0, trSm = 0, punchAmt = 0;
     float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, delaySend = 0, satDrive = 1, satMix = 0;
     float predelaySamp = 0;
@@ -1048,7 +1101,8 @@ public:
         fs = sampleRate;
         lookahead = (int) std::round (0.005 * fs);
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4);
-        eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); delay.prepare (fs); rev.prepare (fs);
+        eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
+        voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
         revSB.prepare (fs); layerSB.prepare (fs); delaySB.prepare (fs);
         widthMeter.prepare (fs, 8.0);
@@ -1070,30 +1124,33 @@ public:
         auto corr = computeCorrection (p);
         if (corr != lastCorrection || ! eqValid) { eq.setGains (MatchEQ::solve (corr, fs)); lastCorrection = corr; eqValid = true; }
 
-        // Comp 1 (fast, peak detector): gain reduction from the crest-factor difference
         const bool learned = p.sourceCrestDb > 0.0f;
-        const float crestIn = learned ? p.sourceCrestDb : 12.0f;
         const float spreadIn = (learned && p.sourceSpreadDb > 0.0f) ? p.sourceSpreadDb : 8.0f;
         const float cAmt = p.compAmount * amt;
-        float g1 = learned ? std::clamp ((crestIn - p.targetCrestDb) * 1.3f, 0.0f, 10.0f) : p.compTotalGrDb * p.comp1Share;
-        g1 *= cAmt * std::max (0.0f, p.peakScale);
-        const float typicalPeak = -18.0f + crestIn;
-        const float thr1 = g1 > 0.05f ? typicalPeak - g1 / (1.0f - 1.0f / p.comp1Ratio) : 50.0f;
-        c1.set (fs, thr1, p.comp1Ratio, p.comp1AttackMs, p.comp1ReleaseMs, g1 * 0.7f);
-        punchOn = p.comp1Punch;
-        punchAmt = std::clamp (p.punch, 0.0f, 2.0f) * cAmt;
-        trFa = msToCoef (0.5f, fs); trFr = msToCoef (40.0f, fs); trSa = msToCoef (30.0f, fs); trSr = msToCoef (40.0f, fs); trSm = msToCoef (2.0f, fs);
-
+        {   // natural vocal compressor: always on (Learn only sets the level it works at, via gain staging)
+            const float ratio = 1.0f + p.optoRatioPer * cAmt;                          // 100 % = 3:1
+            const float thrOpt = p.optoThrDb - 2.0f * std::max (0.0f, cAmt - 1.0f);
+            const float atkMs = 10.0f * std::clamp (p.attackScale, 0.25f, 4.0f);
+            const float relScale = 1.0f / std::clamp (p.speedScale, 0.25f, 4.0f);
+            const float pr = 1.0f + 3.0f * cAmt * std::max (0.0f, p.peakScale);
+            const float makeup = VocalComp::curve (2.0f, ratio, 8.0f);         // keep the loud phrases' level
+            vc.set (thrOpt, ratio, atkMs, relScale, -8.0f, pr, makeup, p.optoFastRelMs, p.optoSlowRelMs);
+            freezeHoldLen = (int) (0.03 * fs);
+            freezeHf = dbToGain (0.5f * p.freezeHfDb) * dbToGain (0.5f * p.freezeHfDb);   // power ratio
+        }
         // Comp 2 (leveler, 20 ms RMS detector, lookahead, holds during pauses).
         // The Suno target includes its reverb (+~0.8 dB of spread), so the dry aim is slightly lower.
         const float spreadTarget = std::max (2.0f, p.targetSpreadDb - 0.8f);
-        float r2 = learned ? std::clamp (1.0f + p.levelerFactor * std::max (0.0f, p.levelerScale) * (spreadIn / spreadTarget - 1.0f), 1.0f, std::max (1.0f, p.comp2Ratio))
-                           : std::min (1.6f, std::max (1.0f, p.comp2Ratio));   // gentle default until Learn
+        // v1.7: never fully off (a calm Learn take must not switch it off); slow and gentle
+        const float lvS = 0.4f * std::max (0.0f, p.levelerScale);   // v1.7 calibration: the opto does most of the work
+        float r2 = learned ? std::clamp (1.0f + p.levelerFactor * lvS * (spreadIn / spreadTarget - 1.0f), 1.0f, std::max (1.0f, p.comp2Ratio))
+                           : 1.25f;
+        r2 = std::max (r2, 1.0f + 0.3f * lvS);
         r2 = 1.0f + (r2 - 1.0f) * cAmt;
         const float thr2 = -18.0f - spreadIn * 0.5f - 2.0f;     // RMS domain, just under the quiet phrases
         const float makeup2 = (-18.0f - thr2) * (1.0f - 1.0f / r2);
         const float spd = std::clamp (p.speedScale, 0.25f, 4.0f);   // >1 = faster
-        c2.set (fs, r2 > 1.01f ? thr2 : 50.0f, r2, p.comp2AttackMs / spd, p.comp2ReleaseMs / spd, r2 > 1.01f ? makeup2 : 0.0f);
+        c2.set (fs, r2 > 1.01f ? thr2 : 50.0f, r2, 150.0f / spd, 1000.0f / spd, r2 > 1.01f ? makeup2 : 0.0f);
         rmsCoef = msToCoef (20.0f, fs);
         holdCoef = msToCoef (10.0f, fs);
         holdDb = -18.0f - 20.0f;                                  // below this the singer is pausing: freeze gains
@@ -1125,29 +1182,41 @@ public:
                 if (b > f0) { sm += u[(size_t) b - 1]; w += 1; }
                 if (b < kNumBands - 1) { sm += u[(size_t) b + 1]; w += 1; }
                 delta[(size_t) b] = sm / w + (bandCenters()[(size_t) b] > fs * 0.45 ? 0.0f : 3.0f);
+                // without a learned "s" keep the air: nothing taken back from 10 kHz up (half at 8-10 kHz)
+                const float fc = bandCenters()[(size_t) b];
+                if (! (p.hasSource && p.hasSibSource && p.hasSibTarget))
+                    delta[(size_t) b] *= fc >= 10000.0f ? 0.0f : (fc >= 8000.0f ? 0.5f : 1.0f);
             }
             float alpha = 0;
             if (p.hasSource && p.hasSibSource && p.hasSibTarget)
             {
+                // v1.7: per band, take back only what your "s" has above Suno's there (smoothed over neighbours,
+                // never more than the EQ lift + 3 dB): the 2-4 kHz body and the 10 kHz+ air each end up like Suno's.
                 auto sumDb = [&] (auto fn) { double e = 0; for (int b = f0; b < kNumBands; ++b) e += std::pow (10.0, fn (b) / 10.0); return 10 * std::log10 (e + 1e-30); };
-                const double lTarget = sumDb ([&] (int b) { return (double) p.sibTarget[(size_t) (b - f0)]; });
-                auto post = [&] (int b, float a) { return (double) (p.sibSource[(size_t) (b - f0)] + corr[(size_t) b] + makeupDb - a * delta[(size_t) b]); };
-                const double lPost = sumDb ([&] (int b) { return post (b, 0.0f); });
-                const double want = std::max (0.0, lPost - lTarget) * std::clamp (p.deessAmount, 0.0f, 2.0f);
-                if (want > 0.05)
+                auto post0 = [&] (int b) { return (double) (p.sibSource[(size_t) (b - f0)] + corr[(size_t) b] + makeupDb); };
+                std::array<float, kNumBands> ex {};
+                for (int b = f0; b < kNumBands; ++b) ex[(size_t) b] = (float) (post0 (b) - p.sibTarget[(size_t) (b - f0)]);
+                const float amt = std::clamp (p.deessAmount, 0.0f, 2.0f);
+                std::array<float, kNumBands> d {};
+                for (int b = f0; b < kNumBands; ++b)
                 {
-                    float lo = 0, hi = 1;
-                    for (int it = 0; it < 30; ++it)
-                    {
-                        const float mid = 0.5f * (lo + hi);
-                        if (lPost - sumDb ([&] (int b) { return post (b, mid); }) < want) lo = mid; else hi = mid;
-                    }
-                    alpha = 0.5f * (lo + hi);
+                    float sm = ex[(size_t) b] * 2, w = 2;
+                    if (b > f0) { sm += ex[(size_t) b - 1]; w += 1; }
+                    if (b < kNumBands - 1) { sm += ex[(size_t) b + 1]; w += 1; }
+                    d[(size_t) b] = std::clamp (amt * sm / w, 0.0f, delta[(size_t) b]);
                 }
+                const double lPost = sumDb (post0), lTarget = sumDb ([&] (int b) { return (double) p.sibTarget[(size_t) (b - f0)]; });
+                const double lAfter = sumDb ([&] (int b) { return post0 (b) - d[(size_t) b]; });
+                alpha = (float) (lPost - lAfter);            // dB taken off the "s" level (for the log)
+                for (int b = f0; b < kNumBands; ++b) delta[(size_t) b] = d[(size_t) b];
                 sibLevelInfo = { (float) lPost, (float) lTarget };
             }
-            else alpha = std::clamp (p.deessAmount, 0.0f, 1.0f) * 0.75f;   // no learned s/z: take most of the lift back
-            for (int b = 0; b < kNumBands; ++b) delta[(size_t) b] = b >= f0 ? -alpha * delta[(size_t) b] : 0.0f;
+            else
+            {
+                alpha = std::clamp (p.deessAmount, 0.0f, 1.0f) * 0.75f;   // no learned s/z: take most of the lift back
+                for (int b = f0; b < kNumBands; ++b) delta[(size_t) b] *= alpha;
+            }
+            for (int b = 0; b < kNumBands; ++b) delta[(size_t) b] = b >= f0 ? -delta[(size_t) b] : 0.0f;
             sibAlpha = alpha;
             if (delta != lastSibDelta || ! sibValid) { deess.setDelta (delta, fs); lastSibDelta = delta; sibValid = true; }
         }
@@ -1190,32 +1259,30 @@ public:
             l *= inGain; r *= inGain;
             const float preL = l, preR = r;
             l = eq.process (l, 0) * eqMakeup; r = eq.process (r, 1) * eqMakeup;
-            // detectors run on the un-delayed signal, gains are applied to the 5 ms delayed signal
-            float pk = std::max (std::abs (l), std::abs (r)), e = 0.5f * (l * l + r * r);
-            rmsEnv = rmsCoef * rmsEnv + (1 - rmsCoef) * e;
+            // v1.7: compressors act on the signal as it is output (no pre-ducking); only S/Z detection looks 5 ms ahead
+            const float e = 0.5f * (l * l + r * r);
             holdEnv = holdCoef * holdEnv + (1 - holdCoef) * e;
             const bool pause = 10 * std::log10 (holdEnv + 1e-12f) < holdDb;
             laL.push (l); laR.push (r);
             const float laOutL = laL.read (lookahead - 1), laOutR = laR.read (lookahead - 1);
-            // Comp 1 (peak): with Punch it listens to the delayed signal, i.e. it reacts AFTER the start of a
-            // syllable instead of anticipating it, so consonant/onset transients pass (Suno's onsets stand
-            // out more than a look-ahead compressor allows). The leveler keeps its look-ahead.
-            const float pkNow = punchOn ? std::max (std::abs (laOutL), std::abs (laOutR)) : pk;
-            float g1 = c1.computeGain (pkNow, pause);
-            float g2 = c2.computeGain (std::sqrt (rmsEnv) * g1, pause);   // RMS domain
-            maxGr1 = std::max (maxGr1, c1.gr); maxGr2 = std::max (maxGr2, c2.gr);
-            deess.detect (preL, preR, gainToDb (g1 * g2));     // 5 ms ahead of the audio it acts on
-            float gT = 1.0f;
-            if (punchAmt > 0)
-            {   // transient emphasis: fast envelope above slow envelope = a syllable is starting (detected 5 ms ahead)
-                trFast = e > trFast ? trFa * trFast + (1 - trFa) * e : trFr * trFast + (1 - trFr) * e;
-                trSlow = e > trSlow ? trSa * trSlow + (1 - trSa) * e : trSr * trSlow + (1 - trSr) * e;
-                const float tr = 10 * std::log10 ((trFast + 1e-12f) / (trSlow + 1e-12f));
-                const float want = pause ? 0.0f : std::clamp (tr, 0.0f, 12.0f) * 0.5f * punchAmt;
-                trGainDb = trSm * trGainDb + (1 - trSm) * want;
-                gT = dbToGain (trGainDb);
+            deess.detect (preL, preR, 0.0f);
+            // consonant flag (5 ms early) held 30 ms: the compressors freeze over s/z/sh/ch/j
+            // voicing: share of energy below 1.5 kHz (vowels ~90 %, s/sh/ch/t/k/breath far below)
+            {
+                const float m0 = 0.5f * (l + r), lo = voiceLp2.process (voiceLp1.process (m0, 0), 0);
+                const float hi = voiceHp2.process (voiceHp1.process (m0, 0), 0);
+                vAll = vCoef * vAll + (1 - vCoef) * m0 * m0; vLow = vCoef * vLow + (1 - vCoef) * lo * lo; vHigh = vCoef * vHigh + (1 - vCoef) * hi * hi;
             }
-            l = laOutL * g1 * g2 * gT; r = laOutR * g1 * g2 * gT;
+            // not a plain vowel: little low energy (s, sh, ch, t, k, breath) or a fricative's hiss on top (z, j, v)
+            const bool unvoiced = vLow < p.voicedShare * vAll || vHigh > freezeHf * vAll;
+            if (unvoiced || deess.kTarget > 0.15f) freezeHold = freezeHoldLen + lookahead; else if (freezeHold > 0) --freezeHold;
+            const bool consonant = freezeHold > 0;
+            const float compMono = 0.5f * (laOutL + laOutR);
+            const float g1 = vc.process (compMono, consonant || pause);
+            rmsEnv = rmsCoef * rmsEnv + (1 - rmsCoef) * compMono * compMono * g1 * g1;
+            const float g2 = c2.computeGain (std::sqrt (rmsEnv), consonant || pause);
+            maxGr1 = std::max (maxGr1, vc.grDb()); maxGr2 = std::max (maxGr2, c2.gr);
+            l = laOutL * g1 * g2; r = laOutR * g1 * g2;
             deess.apply (l, r);
             maxDs = std::max (maxDs, deess.currentCut());
             if (satMix > 0)

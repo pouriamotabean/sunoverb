@@ -178,7 +178,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     band ("dwHigh", "Echo Width High",   -30, 12, 0.0f);
     // v1.5: Advanced Dynamics, relative to what Learn / the preset set (100 % = as learned)
     for (auto [id, name] : std::vector<std::pair<const char*, const char*>> { { "dynPeak", "Peak Comp" }, { "dynLeveler", "Leveler" },
-                                                                               { "dynSpeed", "Leveler Speed" }, { "dynPunch", "Punch" } })
+                                                                               { "dynSpeed", "Comp Speed" }, { "dynPunch", "Attack" } })   // v1.7: dynPunch = opto attack (ID kept for saved sessions)
         p.push_back (std::make_unique<APF> (juce::ParameterID { id, 4 }, name, NRange (0, 200), 100.0f, pct));
     return { p.begin(), p.end() };
 }
@@ -254,7 +254,8 @@ sc::Params SunoChainProcessor::buildParams() const
     p.delayBandDb = { v ("dwLow"), v ("dwMid"), v ("dwHigh") };
     p.peakScale = v ("dynPeak") / 100.0f; p.levelerScale = v ("dynLeveler") / 100.0f;
     p.speedScale = juce::jmax (0.25f, v ("dynSpeed") / 100.0f);
-    p.punch = hidden.punch * v ("dynPunch") / 100.0f;
+    p.punch = 0.0f;                                            // v1.7: onset shaper removed
+    p.attackScale = juce::jmax (0.25f, v ("dynPunch") / 100.0f);   // 100 % = 10 ms
     p.bpm = (float) hostBpm.load();
     return p;
 }
