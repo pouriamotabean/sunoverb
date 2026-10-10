@@ -1,4 +1,4 @@
-# Suno Chain v1.7
+# Suno Chain v1.8
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -6,6 +6,11 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
 1. Replace the `Source/` folder in the repo with the one from this zip (`CMakeLists.txt` and `.github/workflows/build.yml` have not changed since the VS2026 fix; replacing everything is fine too).
 2. Push → **Actions** → when it's green, download **SunoChain-VST3** → copy it to `C:\Program Files\Common Files\VST3` → rescan in Cubase.
 3. If it's red, send me the log.
+
+## New in v1.8 (sibilant ceiling + Match Loudness)
+- **Sibilant ceiling**: S/Z Match treats all your "s/z" with one learned curve; now each single sibilant is also checked: if the chain raised its hiss (relative to the vowel before it) more than it raised your other sibilants (+1 dB), just that one is pulled back. Your "z" at 0:13 went from +3.1 dB to +0.5 dB; the overall "s" level stays at Suno's (-6.4). Shown on the S/Z meter.
+- **MATCH LOUDNESS** (bottom bar, roadmap stage 3): press it, play the vocal (10 s or more, including a loud part), press STOP. It measures your output (ITU-R BS.1770) and sets the gain that brings it to the Suno vocal's loudness from the preset (Suno Lead 01: -19.4 LUFS), then **holds** it (no pumping). The button then shows the gain; it is also the **Loudness** knob in Advanced (double-click = 0 dB = off). Press again any time to re-measure.
+- Detector for voiced "z / j": also looks at the hiss level against the vowel, not only the high-band share.
 
 ## New in v1.7 (natural compression + S/Z air)
 - **New vocal compressor**, always on (Learn only sets the level it works at; the old design could switch itself off, which is why GR stayed at 0):
