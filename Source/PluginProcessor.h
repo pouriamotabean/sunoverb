@@ -79,6 +79,7 @@ private:
     std::atomic<double> hostBpm { 120.0 };
     mutable juce::SpinLock presetLock;
     sc::Params hidden;                 // preset/learned values that are not host parameters
+    std::array<float, sc::kNumBands> learnAppliedCorr {};   // EQ correction active while Learn listened
     juce::String presetName { "No preset (load a .json)" };
     juce::var presetJson;              // full preset, kept in the session
     bool presetLoaded = false;

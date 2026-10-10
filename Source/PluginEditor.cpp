@@ -23,6 +23,7 @@ const Images& Images::get()
         Images i;
         auto load = [] (const unsigned char* d, std::size_t n) { return juce::ImageCache::getFromMemory (d, (int) n); };
         i.faceplate  = load (assets::faceplate_jpg, assets::faceplate_jpgSize);
+        i.sidePanel  = load (assets::side_panel_jpg, assets::side_panel_jpgSize);
         i.knob       = load (assets::knob_std_png, assets::knob_std_pngSize);
         i.knobLarge  = load (assets::knob_large_png, assets::knob_large_pngSize);
         i.pillLong   = load (assets::pill_long_png, assets::pill_long_pngSize);
@@ -35,9 +36,8 @@ const Images& Images::get()
     return im;
 }
 
-// rows of the faceplate image (1536 x 1024) reused for the Advanced drawer: the lower module with its
-// dividers and bottom screws, so the drawer looks like a second, matching module
-constexpr int kDrawerSrcY = 556;
+// side module image (1024 x 1536): dividers at 24.2 / 48 / 71.6 % of the height -> logical y 194 / 384 / 573
+constexpr float kSec[5] { 0.0f, 194.0f, 384.0f, 573.0f, 800.0f };
 
 juce::Font capsFont (float size, bool bold)
 {
@@ -102,7 +102,7 @@ void LookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int 
     const bool off = (bool) s.getProperties().getWithDefault ("off", false);
     const auto& im = Images::get();
     auto b = juce::Rectangle<int> (x, y, w, h).toFloat();
-    const float margin = big ? 14.0f : 8.0f;
+    const float margin = big ? 14.0f : 11.0f;
     const float d = juce::jmin (b.getWidth(), b.getHeight()) - 2 * margin;
     auto k = juce::Rectangle<float> (d, d).withCentre (b.getCentre());
     const float r = d * 0.5f, cx = k.getCentreX(), cy = k.getCentreY();
@@ -130,6 +130,22 @@ void LookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int 
         g.setColour (juce::Colours::white.withAlpha (0.05f)); g.strokePath (track, juce::PathStrokeType (2.0f));
         juce::Path val; val.addCentredArc (cx, cy, ar, ar, 0, start, a, true);
         if (! off) glowPath (g, val, c, 2.2f);
+    }
+    else
+    {   // thin value arc: dim at rest, glowing like a lamp while you touch the knob.
+        // Bipolar knobs (width bands, Output, Tone) start from their 0 dB point.
+        const float ar = r + 4.0f;
+        const bool hot = s.isMouseOverOrDragging() && ! off;
+        juce::Path track; track.addCentredArc (cx, cy, ar, ar, 0, start, end, true);
+        g.setColour (juce::Colours::white.withAlpha (0.045f)); g.strokePath (track, juce::PathStrokeType (1.4f));
+        float from = start;
+        if (s.getProperties().contains ("bipolar"))
+            from = start + (float) s.valueToProportionOfLength (0.0) * (end - start);
+        juce::Path val; val.addCentredArc (cx, cy, ar, ar, 0, juce::jmin (from, a), juce::jmax (from, a), true);
+        if (off) { g.setColour (col::faint.withAlpha (0.6f)); g.strokePath (val, juce::PathStrokeType (1.4f)); }
+        else if (hot) glowPath (g, val, c, 1.6f);
+        else { g.setColour (c.withAlpha (0.10f)); g.strokePath (val, juce::PathStrokeType (4.0f));
+               g.setColour (c.withAlpha (0.45f)); g.strokePath (val, juce::PathStrokeType (1.4f)); }
     }
     // lamp light spilling onto the metal around the indicator
     if (! off)
@@ -178,6 +194,12 @@ void TextLink::paintButton (juce::Graphics& g, bool over, bool down)
     auto c = on ? onColour : (over ? col::cream : col::text.withAlpha (0.85f));
     if (down) c = c.brighter (0.2f);
     drawCaps (g, getButtonText(), r, c, fontSize);
+    if (recording)
+    {   // blinking "recording" lamp left of the text
+        const bool lit = (juce::Time::getMillisecondCounter() / 450) % 2 == 0;
+        const float tw = (float) getButtonText().length() * fontSize * 0.78f;
+        lampDot (g, { r.getCentreX() - tw * 0.5f - 10.0f, r.getCentreY() }, 3.6f, juce::Colour (0xffff5a3c), lit);
+    }
     if (underlineWhenOn && on)
     {
         const float w = juce::jmin (r.getWidth() * 0.6f, (float) getButtonText().length() * fontSize * 0.75f);
@@ -273,7 +295,7 @@ void Display::paintEq (juce::Graphics& g, juce::Rectangle<float> r)
     {
         g.setColour (juce::Colours::white.withAlpha (0.035f)); g.drawVerticalLine ((int) X (f), plot.getY(), plot.getBottom());
         drawCaps (g, f >= 1000 ? juce::String ((int) (f / 1000)) + "k" : juce::String ((int) f),
-                  { X (f) - 20, plot.getBottom() + 3, 40, 12 }, col::dim.withAlpha (0.7f), 9.0f);
+                  { X (f) - 20, plot.getBottom() + 3, 40, 14 }, col::dim.withAlpha (0.8f), 10.0f);
     }
     g.setColour (juce::Colours::white.withAlpha (0.05f)); g.drawHorizontalLine ((int) Y (0), plot.getX(), plot.getRight());
 
@@ -301,9 +323,9 @@ void Display::paintEq (juce::Graphics& g, juce::Rectangle<float> r)
     auto leg = juce::Rectangle<float> (r.getX() + 18, r.getBottom() - 20, r.getWidth() - 36, 14);
     auto item = [&] (juce::Colour c, const juce::String& s, bool on)
     {
-        auto a = leg.removeFromLeft ((float) s.length() * 7.5f + 34.0f);
+        auto a = leg.removeFromLeft ((float) s.length() * 9.0f + 36.0f);
         lampDot (g, { a.getX() + 5, a.getCentreY() }, 2.6f, c, on);
-        drawCaps (g, s, a.withTrimmedLeft (14), on ? col::text.withAlpha (0.8f) : col::faint, 9.0f, juce::Justification::centredLeft);
+        drawCaps (g, s, a.withTrimmedLeft (14), on ? col::text.withAlpha (0.85f) : col::faint, 10.5f, juce::Justification::centredLeft);
     };
     item (col::amber, "Target", snap.hasTarget);
     item (col::cream, "Your voice", snap.hasSource);
@@ -378,7 +400,7 @@ void Meters::update (const SunoChainProcessor::Meters& m)
 void Meters::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
-    auto labels = r.removeFromBottom (22);
+    auto labels = r.removeFromBottom (24);
     r.removeFromTop (12);
     const int n = 5; const float w = r.getWidth() / (float) n;
     auto bar = [&] (int i, const juce::String& name, float v, float lo, float hi, bool down, juce::Colour c1, juce::Colour c2)
@@ -395,7 +417,7 @@ void Meters::paint (juce::Graphics& g)
             juce::ColourGradient grad (c2, 0, track.getY(), c1, 0, track.getBottom(), false);
             g.setGradientFill (grad); g.fillRoundedRectangle (fill, 2);
         }
-        drawCaps (g, name, juce::Rectangle<float> (lane.getX() - 4, labels.getY() + 2, lane.getWidth() + 8, 12), col::dim, 8.5f);
+        drawCaps (g, name, juce::Rectangle<float> (lane.getX() - 6, labels.getY() + 1, lane.getWidth() + 12, 16), col::dim.brighter (0.1f), 9.0f);
     };
     bar (0, "In", in, -60, 0, false, col::green, col::amber);
     bar (1, "GR", gr, 0, 15, true, col::amber, col::amber);
@@ -430,9 +452,9 @@ Root::Root (SunoChainProcessor& p) : proc (p)
         s->setInterceptsMouseClicks (false, false);
         addAndMakeVisible (*s);
     }
-    status.setFont (juce::Font (juce::FontOptions (11.5f)));
+    status.setFont (juce::Font (juce::FontOptions (13.5f)));
     delayInfo.setJustificationType (juce::Justification::centredRight);
-    delayInfo.setFont (capsFont (9.0f));
+    delayInfo.setFont (capsFont (10.5f));
 
     // main controls
     addKnob ("amount", "Amount", 150, false, true);
@@ -446,6 +468,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     struct D { const char* id; const char* name; bool violet; };
     for (const auto& d : std::vector<D> {
             { "eqLow", "Low Boost", false }, { "satDrive", "Sat Drive", false }, { "output", "Output", false },
+            { "dynPeak", "Peak", false }, { "dynLeveler", "Leveler", false }, { "dynSpeed", "Speed", false }, { "dynPunch", "Punch", false },
             { "width", "Width", false }, { "wetHpf", "HPF", false }, { "wetLpf", "LPF", false }, { "duckRel", "Duck Rel", false },
             { "rwLow", "Low", false }, { "rwMid", "Mid", false }, { "rwHigh", "High", false },
             { "lwLow", "Low", true }, { "lwMid", "Mid", true }, { "lwHigh", "High", true },
@@ -455,6 +478,8 @@ Root::Root (SunoChainProcessor& p) : proc (p)
         drawerIds.push_back (d.id);
     }
 
+    for (auto id : { "rwLow", "rwMid", "rwHigh", "lwLow", "lwMid", "lwHigh", "dwLow", "dwMid", "dwHigh", "output", "wTone" })
+        knobs[id]->slider.getProperties().set ("bipolar", true);
     revLamp.colour = echoLamp.colour = col::amber; widthLamp.colour = col::violet;
     for (auto* l : { &revLamp, &widthLamp, &echoLamp }) addAndMakeVisible (*l);
     addAndMakeVisible (syncB);
@@ -487,7 +512,7 @@ Knob& Root::addKnob (const juce::String& id, const juce::String& name, int size,
     if (big) k->slider.getProperties().set ("big", true);
     k->label.setText (name.toUpperCase(), juce::dontSendNotification);
     k->label.setJustificationType (juce::Justification::centred);
-    k->label.setFont (capsFont (size >= 60 ? (big ? 11.5f : 10.5f) : 8.5f));
+    k->label.setFont (capsFont (size >= 60 ? (big ? 14.0f : 12.5f) : 10.5f));
     k->label.setColour (juce::Label::textColourId, col::text.withAlpha (0.82f));
     k->label.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (k->slider); addAndMakeVisible (k->label);
@@ -502,10 +527,10 @@ void Root::placeKnob (const juce::String& id, float cx, float cy, int size)
 {
     auto& k = *knobs[id];
     const bool big = k.slider.getProperties().contains ("big");
-    const int box = size + (big ? 28 : 16);
+    const int box = size + (big ? 28 : 22);
     k.slider.setBounds (juce::Rectangle<int> (box, box).withCentre ({ (int) cx, (int) cy }));
     const int ly = (int) (cy + (float) size * 0.5f + (big ? 16.0f : 9.0f));
-    k.label.setBounds ((int) cx - 60, ly, 120, 14);
+    k.label.setBounds ((int) cx - 64, ly, 128, 18);
 }
 
 void Root::setAdvanced (bool open)
@@ -526,10 +551,9 @@ void Root::paint (juce::Graphics& g)
     g.drawImage (im.faceplate, juce::Rectangle<float> (0, 0, (float) kW, (float) kH), juce::RectanglePlacement::stretchToFit);
     if (proc.advancedOpen)
     {
-        const int sh = im.faceplate.getHeight() - kDrawerSrcY;
-        g.drawImage (im.faceplate, 0, kH, kW, kDrawerH, 0, kDrawerSrcY, im.faceplate.getWidth(), sh);
-        juce::ColourGradient seam (juce::Colours::black.withAlpha (0.55f), 0, (float) kH, juce::Colours::black.withAlpha (0.0f), 0, (float) kH + 18.0f, false);
-        g.setGradientFill (seam); g.fillRect (44, kH, kW - 88, 18);
+        g.drawImage (im.sidePanel, juce::Rectangle<float> ((float) kW, 0, (float) kSideW, (float) kH), juce::RectanglePlacement::stretchToFit);
+        juce::ColourGradient seam (juce::Colours::black.withAlpha (0.6f), (float) kW, 0, juce::Colours::black.withAlpha (0.0f), (float) kW + 16.0f, 0, false);
+        g.setGradientFill (seam); g.fillRect (kW, 0, 16, kH);
     }
 
     // logo: small waveform mark + name
@@ -541,40 +565,46 @@ void Root::paint (juce::Graphics& g)
             const float bx = x + (float) i * 6.0f, h = hs[i];
             glowLine (g, { bx, cy - h / 2, bx, cy + h / 2 }, col::cream, 1.6f, 0.75f);
         }
-        drawCaps (g, "Suno Chain", { x + 44, cy - 14, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.4", { x + 44, cy + 13, 60, 12 }, col::dim.withAlpha (0.7f), 8.0f, juce::Justification::centredLeft);
+        drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
+        drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
+        drawCaps (g, "v1.6", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
     }
     // section titles
-    drawCaps (g, "Tone", { 70, 444, 120, 14 }, col::dim, 9.5f, juce::Justification::centredLeft);
-    drawCaps (g, "Space", { 366, 444, 120, 14 }, col::dim, 9.5f, juce::Justification::centredLeft);
-    drawCaps (g, "Width", { 621, 444, 120, 14 }, col::dim, 9.5f, juce::Justification::centredLeft);
-    drawCaps (g, "Echo", { 876, 444, 120, 14 }, col::dim, 9.5f, juce::Justification::centredLeft);
+    drawCaps (g, "Tone", { 70, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
+    drawCaps (g, "Space", { 366, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
+    drawCaps (g, "Width", { 621, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
+    drawCaps (g, "Echo", { 876, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
     const bool sync = proc.apvts.getRawParameterValue ("dlySync")->load() > 0.5f;
-    if (sync) drawCaps (g, "Note", { 883, 701, 120, 14 }, col::text.withAlpha (0.82f), 10.5f);
-    drawCaps (g, "Sync", { 1001, 701, 120, 14 }, col::text.withAlpha (0.82f), 10.5f);
+    if (sync) drawCaps (g, "Note", { 883, 701, 120, 18 }, col::text.withAlpha (0.82f), 12.5f);
+    drawCaps (g, "Sync", { 1001, 701, 120, 18 }, col::text.withAlpha (0.82f), 12.5f);
     if (proc.advancedOpen)
-    {
-        const float y = (float) kH + 46.0f;
-        drawCaps (g, "Tone  /  Output", { 70, y, 220, 14 }, col::dim, 9.0f, juce::Justification::centredLeft);
-        drawCaps (g, "Reverb  /  width per band", { 366, y, 220, 14 }, col::dim, 9.0f, juce::Justification::centredLeft);
-        drawCaps (g, "Vocal width per band", { 621, y, 220, 14 }, col::dim, 9.0f, juce::Justification::centredLeft);
-        drawCaps (g, "Echo  /  width per band", { 876, y, 220, 14 }, col::dim, 9.0f, juce::Justification::centredLeft);
-        drawCaps (g, "Width bands: side only, mono stays untouched.   Low < 300 Hz,  Mid 300 Hz - 4 kHz,  High > 4 kHz",
-                  { 120, (float) (kH + kDrawerH) - 52.0f, 960, 14 }, col::dim.withAlpha (0.7f), 8.5f);
+    {   // side module: four sections stacked (the image's dividers)
+        const float x = (float) kW + 40.0f;
+        auto title = [&] (int sec, const juce::String& t, const juce::String& sub)
+        {
+            drawCaps (g, t, { x + 26, kSec[sec] + 10, 220, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
+            if (sub.isNotEmpty()) drawCaps (g, sub, { x + 150, kSec[sec] + 10, 220, 18 }, col::dim.withAlpha (0.75f), 9.5f, juce::Justification::centredRight);
+        };
+        title (0, "Tone  /  Dynamics", "100 % = learned");
+        title (1, "Reverb", "width per band");
+        title (2, "Vocal width", "per band");
+        title (3, "Echo", "width per band");
+        drawCaps (g, "Side only: mono and the centre stay untouched", { x, kSec[2] + 128, 400, 16 }, col::dim.withAlpha (0.7f), 9.5f);
+        drawCaps (g, "Low < 300 Hz   Mid 300 Hz - 4 kHz   High > 4 kHz", { x, kSec[2] + 146, 400, 16 }, col::dim.withAlpha (0.7f), 9.5f);
     }
 }
 
 void Root::resized()
 {
     pill.setBounds (410, 51, 300, 50);
-    loadB.setBounds (730, 62, 70, 28);
-    saveB.setBounds (802, 62, 70, 28);
-    learnB.setBounds (874, 62, 120, 28);
-    clearB.setBounds (996, 62, 74, 28);
+    loadB.setBounds (722, 60, 78, 32);
+    saveB.setBounds (800, 60, 78, 32);
+    learnB.setBounds (878, 60, 132, 32);
+    clearB.setBounds (1010, 60, 84, 32);
 
     // glass display (inside the faceplate well) + tabs, meters, AMOUNT
     display.setBounds (144, 182, 580, 207);
-    eqTab.setBounds (612, 188, 44, 22); widthTab.setBounds (656, 188, 62, 22);
+    eqTab.setBounds (600, 188, 48, 24); widthTab.setBounds (648, 188, 70, 24);
     meters.setBounds (785, 182, 145, 207);
     placeKnob ("amount", 1046, 262, 150);
 
@@ -593,19 +623,21 @@ void Root::resized()
     revLamp.setBounds (412, 441, 20, 20);
     widthLamp.setBounds (664, 441, 20, 20);
     echoLamp.setBounds (910, 441, 20, 20);
-    delayInfo.setBounds (960, 444, 172, 14);
+    delayInfo.setBounds (940, 442, 192, 18);
 
-    status.setBounds (120, 744, 640, 16);
-    advancedB.setBounds (980, 740, 120, 24);
+    status.setBounds (120, 742, 700, 20);
+    advancedB.setBounds (960, 738, 140, 28);
 
-    // Advanced drawer
-    const float d1 = (float) kH + 112.0f, d2 = (float) kH + 236.0f;
-    placeKnob ("eqLow", 100, d1, 42); placeKnob ("satDrive", 170, d1, 42); placeKnob ("output", 260, d1, 42);
-    placeKnob ("width", 380, d1, 42); placeKnob ("wetHpf", 440, d1, 42); placeKnob ("wetLpf", 500, d1, 42); placeKnob ("duckRel", 562, d1, 42);
-    placeKnob ("rwLow", 380, d2, 42); placeKnob ("rwMid", 440, d2, 42); placeKnob ("rwHigh", 500, d2, 42);
-    placeKnob ("lwLow", 650, d1, 42); placeKnob ("lwMid", 726, d1, 42); placeKnob ("lwHigh", 802, d1, 42);
-    placeKnob ("dlyToRev", 910, d1, 42);
-    placeKnob ("dwLow", 910, d2, 42); placeKnob ("dwMid", 980, d2, 42); placeKnob ("dwHigh", 1050, d2, 42);
+    // Advanced side module (x 1200-1680): columns and rows inside its four sections
+    const float c[4] { kW + 80.0f, kW + 180.0f, kW + 280.0f, kW + 380.0f };
+    const int ks = 40;
+    placeKnob ("eqLow", c[0], 64, ks); placeKnob ("satDrive", c[1], 64, ks); placeKnob ("output", c[3], 64, ks);
+    placeKnob ("dynPeak", c[0], 144, ks); placeKnob ("dynLeveler", c[1], 144, ks); placeKnob ("dynSpeed", c[2], 144, ks); placeKnob ("dynPunch", c[3], 144, ks);
+    placeKnob ("width", c[0], kSec[1] + 62, ks); placeKnob ("wetHpf", c[1], kSec[1] + 62, ks); placeKnob ("wetLpf", c[2], kSec[1] + 62, ks); placeKnob ("duckRel", c[3], kSec[1] + 62, ks);
+    placeKnob ("rwLow", c[0], kSec[1] + 140, ks); placeKnob ("rwMid", c[1], kSec[1] + 140, ks); placeKnob ("rwHigh", c[2], kSec[1] + 140, ks);
+    placeKnob ("lwLow", c[0], kSec[2] + 72, ks); placeKnob ("lwMid", c[1], kSec[2] + 72, ks); placeKnob ("lwHigh", c[2], kSec[2] + 72, ks);
+    placeKnob ("dlyToRev", c[0], kSec[3] + 72, ks);
+    placeKnob ("dwLow", c[1], kSec[3] + 72, ks); placeKnob ("dwMid", c[2], kSec[3] + 72, ks); placeKnob ("dwHigh", c[3], kSec[3] + 72, ks);
 }
 
 void Root::tick()
@@ -613,6 +645,8 @@ void Root::tick()
     const bool learning = proc.isLearning();
     learnB.setButtonText (learning ? "STOP " + juce::String (proc.learnSeconds(), 0) + " S" : (proc.hasLearned() ? "RE-LEARN" : "LEARN"));
     learnB.setToggleState (learning, juce::dontSendNotification);
+    learnB.recording = learning;
+    if (learning) learnB.repaint();
     if (! learning && statusText.startsWith ("Learning")) { juce::String msg; proc.stopLearn (msg); statusText = msg; }
     const auto pn = proc.hasPreset() ? proc.getPresetName() : juce::String ("Suno Lead 01");
     if (pill.name != pn) { pill.name = pn; pill.repaint(); }
@@ -649,6 +683,8 @@ void Root::tick()
     {
         const bool show = k->slider.isMouseButtonDown() || k->slider.isMouseOver();
         const auto t = show ? k->slider.getTextFromValue (k->slider.getValue()) : k->name.toUpperCase();
+        if ((bool) k->slider.getProperties().getWithDefault ("hov", false) != show)
+        { k->slider.getProperties().set ("hov", show); k->slider.repaint(); }   // arc glows while touched
         if (k->label.getText() != t)
         {
             k->label.setText (t, juce::dontSendNotification);
@@ -728,18 +764,19 @@ SunoChainEditor::~SunoChainEditor() { stopTimer(); }
 
 void SunoChainEditor::applyLayout (bool advanced)
 {
-    const int lh = ui::kH + (advanced ? ui::kDrawerH : 0);
-    root.setSize (ui::kW, lh);
+    const int lh = ui::kH;
+    logicalW = ui::kW + (advanced ? ui::kSideW : 0);
+    root.setSize (logicalW, lh);
     const float s = juce::jlimit (0.6f, 1.6f, proc.uiScale);
-    constrainer.setFixedAspectRatio ((double) ui::kW / (double) lh);
-    constrainer.setSizeLimits ((int) (ui::kW * 0.6f), (int) ((float) lh * 0.6f), (int) (ui::kW * 1.6f), (int) ((float) lh * 1.6f));
-    setSize (juce::roundToInt ((float) ui::kW * s), juce::roundToInt ((float) lh * s));
+    constrainer.setFixedAspectRatio ((double) logicalW / (double) lh);
+    constrainer.setSizeLimits ((int) ((float) logicalW * 0.6f), (int) ((float) lh * 0.6f), (int) ((float) logicalW * 1.6f), (int) ((float) lh * 1.6f));
+    setSize (juce::roundToInt ((float) logicalW * s), juce::roundToInt ((float) lh * s));
     resized();
 }
 
 void SunoChainEditor::resized()
 {
-    const float s = (float) getWidth() / (float) ui::kW;
+    const float s = (float) getWidth() / (float) logicalW;
     root.setTransform (juce::AffineTransform::scale (s));
     if (getWidth() > 0) proc.uiScale = s;
 }

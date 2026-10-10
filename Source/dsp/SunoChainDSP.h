@@ -38,8 +38,11 @@ struct Params
     // dB, normalised (mean of 250..4k bands = 0). Default = built-in "Suno Lead 01" so the plugin works without a preset file.
     std::array<float, kNumBands> targetCurve { -9.5f, -12.15f, -3.46f, -5.82f, -5.68f, 1.45f, 2.05f, 10.47f, 8.17f, 2.0f, 4.1f, 6.42f, 5.04f, 1.04f, 1.17f, -1.92f, -6.03f, -7.82f, -9.97f, -12.68f, -20.1f, -16.94f, -19.72f, -16.91f, -21.3f, -32.19f };
     std::array<float, kNumBands> sourceCurve {};   // dB, from Learn
+    std::array<float, kNumBands> chainEffect {};   // dB, from Learn (v1.5): what the rest of the chain does to the spectrum
+    bool  hasChainEffect = false;
     bool  hasTarget = true, hasSource = false;
     float eqAmount = 1.0f, eqMaxBoostDb = 12.0f, eqMaxCutDb = 24.0f, eqLowWeight = 0.35f;
+    float eqMaxBoostHighDb = 15.0f;   // v1.5: from 6 kHz up (air), where dark vocals need more than 12 dB to reach Suno
 
     // dynamics
     float compTotalGrDb = 6.0f;     // planned total gain reduction on typical loud syllables
@@ -48,8 +51,12 @@ struct Params
     float targetSpreadDb = 5.5f;    // p90-p10 of 400 ms levels in the Suno vocal (phrase-level consistency)
     float sourceSpreadDb = 0.0f;    // from Learn (0 = unknown)
     float comp1Ratio = 4.0f, comp1AttackMs = 2.0f, comp1ReleaseMs = 50.0f, comp1Share = 0.55f;
+    bool  comp1Punch = true;        // v1.5: comp 1 without look-ahead (onsets pass)
+    float punch = 1.5f;             // v1.5: transient emphasis on syllable onsets, fitted so onsets stand out like Suno's
+    // v1.5 Advanced Dynamics (1 = as learned / preset): peak compressor amount, leveler strength, leveler speed
+    float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f;
     float comp2Ratio = 3.0f, comp2AttackMs = 30.0f, comp2ReleaseMs = 300.0f;   // ratio = max ratio for the leveler
-    float levelerFactor = 1.5f;     // calibration: nominal ratio needed per unit of spread excess (tested on real vocals)
+    float levelerFactor = 2.1f;     // calibration: nominal ratio needed per unit of spread excess (v1.5: 2.1 with Punch on)
     float compAmount = 1.0f;
 
     // sibilance balancer (v1.3): level of "s"/"z"/"sh" relative to the vowel around them, as in the Suno vocal.
@@ -91,7 +98,7 @@ struct Params
     // reverb
     bool  reverbOn = true;
     float predelayMs = 180.0f, rt60 = 3.0f, rt60LowMul = 1.0f, rt60HighMul = 0.75f, crossoverHz = 1500.0f;
-    float size = 1.0f, modDepth = 2.5f, diffusion = 0.75f, diffusionSize = 2.0f;
+    float size = 1.0f, modDepth = 0.5f, diffusion = 0.75f, diffusionSize = 2.0f;
     float earlyMs = 22.0f, earlyLevelDb = -100.0f;   // discrete early taps off: Suno's reverb has no slap
     float wetHpf = 300.0f, wetLpf = 5000.0f, wetBumpHz = 2500.0f, wetBumpDb = 2.0f;
     float width = 1.0f;
@@ -99,6 +106,7 @@ struct Params
 
     // ducking of the wet bus by the dry vocal
     float duckDb = 7.0f, duckAttackMs = 5.0f, duckReleaseMs = 120.0f;
+    bool  duckRelative = true; float duckRelStartDb = 4.0f, duckRelRangeDb = 10.0f;   // v1.5 relative ducking
 
     // learned
     float sourceLevelDb = -18.0f;   // median singing RMS of your input (dBFS), from Learn
@@ -211,7 +219,7 @@ inline std::array<float, kNumBands> computeCorrection (const Params& p)
     std::array<float, kNumBands> d {};
     if (! (p.hasTarget && p.hasSource)) return d;
     std::array<float, kNumBands> raw {};
-    for (int i = 0; i < kNumBands; ++i) raw[i] = p.targetCurve[i] - p.sourceCurve[i];
+    for (int i = 0; i < kNumBands; ++i) raw[i] = p.targetCurve[i] - p.sourceCurve[i] - (p.hasChainEffect ? p.chainEffect[i] : 0.0f);
     for (int i = 0; i < kNumBands; ++i)   // light 3-band smoothing
     {
         float s = raw[i] * 2.0f, w = 2.0f;
@@ -224,7 +232,7 @@ inline std::array<float, kNumBands> computeCorrection (const Params& p)
         const float fc = bandCenters()[i];
         if (fc < 120.0f)      v = std::min (v, 0.0f);
         else if (fc < 300.0f) v = v > 0.0f ? v * p.eqLowWeight : v;
-        d[i] = std::clamp (v, -p.eqMaxCutDb, p.eqMaxBoostDb);
+        d[i] = std::clamp (v, -p.eqMaxCutDb, fc >= 6000.0f ? std::max (p.eqMaxBoostDb, p.eqMaxBoostHighDb) : p.eqMaxBoostDb);
     }
     return d;
 }
@@ -725,21 +733,23 @@ struct Learner
     static constexpr int kMaxFrames = 1200;     // ~100 s at 48k
     static constexpr int kMaxBlocks = 4000;
     std::vector<float> frameBands;              // kMaxFrames * kNumBands (dB)
+    std::vector<float> frameBandsOut;           // same frames, the plugin's own output (mid): closed-loop EQ (v1.5)
     std::vector<float> frameLevel;              // dB
     std::vector<float> blockRms, blockPeak;     // dB
-    std::vector<float> fifo; int fifoPos = 0;
+    std::vector<float> fifo, fifoOut; int fifoPos = 0;
     int blockLen = 2400, blockPos = 0; float bSum = 0, bPeak = 0;
     std::atomic<int> nFrames { 0 }, nBlocks { 0 };
     std::atomic<bool> active { false };
     double fs = 48000;
-    std::vector<std::complex<float>> buf;
+    std::vector<std::complex<float>> buf, bufOut;
     std::vector<float> window;
     SibilantAnalyzer sib;
 
     void prepare (double s)
     {
         fs = s; blockLen = (int) (0.05 * fs); sib.prepare (s);
-        frameBands.assign ((size_t) kMaxFrames * kNumBands, 0.0f); frameLevel.assign (kMaxFrames, -200.0f);
+        frameBands.assign ((size_t) kMaxFrames * kNumBands, 0.0f); frameBandsOut.assign ((size_t) kMaxFrames * kNumBands, 0.0f);
+        frameLevel.assign (kMaxFrames, -200.0f); fifoOut.assign (kFft, 0.0f); bufOut.assign (kFft, {});
         blockRms.assign (kMaxBlocks, -200.0f); blockPeak.assign (kMaxBlocks, -200.0f);
         fifo.assign (kFft, 0.0f); buf.assign (kFft, {}); window.resize (kFft);
         for (int i = 0; i < kFft; ++i) window[(size_t) i] = (float) (0.5 - 0.5 * std::cos (2 * kPi * i / (kFft - 1)));
@@ -749,7 +759,8 @@ struct Learner
 
     static void fft (std::vector<std::complex<float>>& a) { fftInPlace (a); }
 
-    inline void push (float x)   // audio thread
+    // x = raw input (mono), out = the plugin's output mid for the same sample
+    inline void push (float x, float out = 0.0f)   // audio thread
     {
         if (! active) return;
         sib.push (x);
@@ -766,6 +777,7 @@ struct Learner
             }
             blockPos = 0; bSum = 0; bPeak = 0;
         }
+        fifoOut[(size_t) fifoPos] = out;
         fifo[(size_t) fifoPos++] = x;
         if (fifoPos >= kFft)
         {
@@ -775,38 +787,71 @@ struct Learner
             double e = 0;
             for (int i = 0; i < kFft; ++i) { buf[(size_t) i] = { fifo[(size_t) i] * window[(size_t) i], 0.0f }; e += fifo[(size_t) i] * fifo[(size_t) i]; }
             fft (buf);
+            for (int i = 0; i < kFft; ++i) bufOut[(size_t) i] = { fifoOut[(size_t) i] * window[(size_t) i], 0.0f };
+            fft (bufOut);
             frameLevel[(size_t) f] = (float) (10 * std::log10 (e / kFft + 1e-20));
             const auto& fc = bandCenters();
             for (int b = 0; b < kNumBands; ++b)
             {
                 double lo = fc[b] / std::pow (2.0, 1.0 / 6), hi = fc[b] * std::pow (2.0, 1.0 / 6);
                 int k0 = std::max (1, (int) std::ceil (lo * kFft / fs)), k1 = std::min (kFft / 2, (int) std::floor (hi * kFft / fs));
-                double s = 0; int cnt = 0;
-                for (int k = k0; k <= k1; ++k) { s += std::norm (buf[(size_t) k]); ++cnt; }
+                double s = 0, so = 0; int cnt = 0;
+                for (int k = k0; k <= k1; ++k) { s += std::norm (buf[(size_t) k]); so += std::norm (bufOut[(size_t) k]); ++cnt; }
                 frameBands[(size_t) f * kNumBands + b] = (float) (10 * std::log10 (cnt > 0 ? s / cnt : 1e-20) + 1e-9);
+                frameBandsOut[(size_t) f * kNumBands + b] = (float) (10 * std::log10 (cnt > 0 ? so / cnt + 1e-20 : 1e-20));
             }
             nFrames = f + 1;
         }
     }
 
+    // closed-loop EQ: effect of the rest of the chain = output - (input + correction that was active), smoothed
+    static std::array<float, kNumBands> chainEffectFrom (const std::array<float, kNumBands>& source, const std::array<float, kNumBands>& out,
+                                                         const std::array<float, kNumBands>& appliedCorr)
+    {
+        std::array<float, kNumBands> expect {}, e {}, r {};
+        for (int b = 0; b < kNumBands; ++b) expect[(size_t) b] = source[(size_t) b] + appliedCorr[(size_t) b];
+        normaliseCurve (expect);
+        for (int b = 0; b < kNumBands; ++b) r[(size_t) b] = out[(size_t) b] - expect[(size_t) b];
+        for (int b = 0; b < kNumBands; ++b)
+        {
+            float s = r[(size_t) b] * 2, w = 2;
+            if (b > 0) { s += r[(size_t) b - 1]; w += 1; }
+            if (b < kNumBands - 1) { s += r[(size_t) b + 1]; w += 1; }
+            const float fc = bandCenters()[(size_t) b];
+            e[(size_t) b] = fc < 120.0f ? 0.0f : std::clamp (s / w, -6.0f, 6.0f);   // lows: Learn material too thin to trust
+        }
+        return e;
+    }
+
     // message thread: summarise. Returns false if not enough material.
-    bool summarise (std::array<float, kNumBands>& curve, float& levelDb, float& crestDb, float& spreadDb) const
+    // outCurve (optional): normalised spectrum of the plugin's output over the same frames
+    bool summarise (std::array<float, kNumBands>& curve, float& levelDb, float& crestDb, float& spreadDb,
+                    std::array<float, kNumBands>* outCurve = nullptr) const
     {
         int nf = nFrames.load(), nb = nBlocks.load();
         if (nf < 20 || nb < 40) return false;
         std::vector<float> lv (frameLevel.begin(), frameLevel.begin() + nf);
         auto sorted = lv; std::sort (sorted.begin(), sorted.end());
         float p95 = sorted[(size_t) (0.95 * (nf - 1))];
-        std::array<double, kNumBands> acc {}; int used = 0;
+        std::array<double, kNumBands> acc {}, accOut {}; int used = 0;
         for (int f = 0; f < nf; ++f)
         {
             if (lv[(size_t) f] < p95 - 25) continue;
-            for (int b = 0; b < kNumBands; ++b) acc[b] += std::pow (10.0, frameBands[(size_t) f * kNumBands + b] / 10.0);
+            for (int b = 0; b < kNumBands; ++b)
+            {
+                acc[b] += std::pow (10.0, frameBands[(size_t) f * kNumBands + b] / 10.0);
+                accOut[b] += std::pow (10.0, frameBandsOut[(size_t) f * kNumBands + b] / 10.0);
+            }
             ++used;
         }
         if (used < 10) return false;
         for (int b = 0; b < kNumBands; ++b) curve[b] = (float) (10 * std::log10 (acc[b] / used + 1e-30));
         normaliseCurve (curve);
+        if (outCurve != nullptr)
+        {
+            for (int b = 0; b < kNumBands; ++b) (*outCurve)[(size_t) b] = (float) (10 * std::log10 (accOut[b] / used + 1e-30));
+            normaliseCurve (*outCurve);
+        }
         // blocks
         std::vector<float> br (blockRms.begin(), blockRms.begin() + nb), bp (blockPeak.begin(), blockPeak.begin() + nb);
         auto s2 = br; std::sort (s2.begin(), s2.end());
@@ -982,13 +1027,15 @@ public:
     Biquad wetHp, wetLp, wetBump;
     DelayLine laL, laR;                       // lookahead for the compressors
     int lookahead = 0;
-    float duckEnv = 0, duckGr = 0, duckEnvCoef = 0, duckAtk = 0, duckRel = 0;
-    float rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60;
+    float duckEnv = 0, duckGr = 0, duckEnvCoef = 0, duckAtk = 0, duckRel = 0, phraseRef = -100, phraseDecay = 0;
+    float rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
+    float trFast = 0, trSlow = 0, trFa = 0, trFr = 0, trSa = 0, trSr = 0, trGainDb = 0, trSm = 0, punchAmt = 0;
     float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, delaySend = 0, satDrive = 1, satMix = 0;
     float predelaySamp = 0;
     double fs = 48000;
     std::array<float, kNumBands> lastCorrection {}, lastSibDelta {};
     bool sibValid = false;
+    float sibAlpha = 0; std::array<float, 2> sibLevelInfo { 0, 0 };   // analysis: share of the lift taken back; s level before / Suno
     float eqMakeup = 1.0f;
     bool eqValid = false;
     // meters (written by the audio thread, read by the editor)
@@ -1029,20 +1076,24 @@ public:
         const float spreadIn = (learned && p.sourceSpreadDb > 0.0f) ? p.sourceSpreadDb : 8.0f;
         const float cAmt = p.compAmount * amt;
         float g1 = learned ? std::clamp ((crestIn - p.targetCrestDb) * 1.3f, 0.0f, 10.0f) : p.compTotalGrDb * p.comp1Share;
-        g1 *= cAmt;
+        g1 *= cAmt * std::max (0.0f, p.peakScale);
         const float typicalPeak = -18.0f + crestIn;
         const float thr1 = g1 > 0.05f ? typicalPeak - g1 / (1.0f - 1.0f / p.comp1Ratio) : 50.0f;
         c1.set (fs, thr1, p.comp1Ratio, p.comp1AttackMs, p.comp1ReleaseMs, g1 * 0.7f);
+        punchOn = p.comp1Punch;
+        punchAmt = std::clamp (p.punch, 0.0f, 2.0f) * cAmt;
+        trFa = msToCoef (0.5f, fs); trFr = msToCoef (40.0f, fs); trSa = msToCoef (30.0f, fs); trSr = msToCoef (40.0f, fs); trSm = msToCoef (2.0f, fs);
 
         // Comp 2 (leveler, 20 ms RMS detector, lookahead, holds during pauses).
         // The Suno target includes its reverb (+~0.8 dB of spread), so the dry aim is slightly lower.
         const float spreadTarget = std::max (2.0f, p.targetSpreadDb - 0.8f);
-        float r2 = learned ? std::clamp (1.0f + p.levelerFactor * (spreadIn / spreadTarget - 1.0f), 1.0f, std::max (1.0f, p.comp2Ratio))
+        float r2 = learned ? std::clamp (1.0f + p.levelerFactor * std::max (0.0f, p.levelerScale) * (spreadIn / spreadTarget - 1.0f), 1.0f, std::max (1.0f, p.comp2Ratio))
                            : std::min (1.6f, std::max (1.0f, p.comp2Ratio));   // gentle default until Learn
         r2 = 1.0f + (r2 - 1.0f) * cAmt;
         const float thr2 = -18.0f - spreadIn * 0.5f - 2.0f;     // RMS domain, just under the quiet phrases
         const float makeup2 = (-18.0f - thr2) * (1.0f - 1.0f / r2);
-        c2.set (fs, r2 > 1.01f ? thr2 : 50.0f, r2, p.comp2AttackMs, p.comp2ReleaseMs, r2 > 1.01f ? makeup2 : 0.0f);
+        const float spd = std::clamp (p.speedScale, 0.25f, 4.0f);   // >1 = faster
+        c2.set (fs, r2 > 1.01f ? thr2 : 50.0f, r2, p.comp2AttackMs / spd, p.comp2ReleaseMs / spd, r2 > 1.01f ? makeup2 : 0.0f);
         rmsCoef = msToCoef (20.0f, fs);
         holdCoef = msToCoef (10.0f, fs);
         holdDb = -18.0f - 20.0f;                                  // below this the singer is pausing: freeze gains
@@ -1059,25 +1110,48 @@ public:
             }
             eqMakeup = (float) std::sqrt (a / std::max (b, 1e-12));
         }
-        {   // S/Z Match: extra correction on sibilants (see DeEsser)
+        {   // S/Z Match (v1.5): bring the overall level of your sibilants (relative to the vowel before them) to
+            // Suno's, by taking back part of the high lift the vowel EQ gave them. The level is the sum over the
+            // bands from 2 kHz up, which stays stable even with only a few "s" in the Learn take (the single
+            // bands do not). Never boosts sibilants; at most 3 dB darker than your raw "s".
             std::array<float, kNumBands> delta {};
             const int f0 = SibilantAnalyzer::kFirstBand;
-            const bool match = p.hasSource && p.hasSibSource && p.hasSibTarget;
             const float makeupDb = gainToDb (eqMakeup);   // the EQ make-up lifts sibilants as well
-            std::array<float, kNumBands> raw {};
-            for (int b = f0; b < kNumBands; ++b)
-                raw[(size_t) b] = match ? p.eqAmount * amt * (p.sibTarget[(size_t) (b - f0)] - p.sibSource[(size_t) (b - f0)]) - corr[(size_t) b] - makeupDb
-                                        : -std::max (0.0f, corr[(size_t) b]);
-            for (int b = f0; b < kNumBands; ++b)   // light smoothing, limits
+            std::array<float, kNumBands> u {};
+            for (int b = f0; b < kNumBands; ++b) u[(size_t) b] = std::max (0.0f, corr[(size_t) b] + makeupDb);
+            for (int b = f0; b < kNumBands; ++b)   // smooth shape, + up to 3 dB below raw
             {
-                float sm = raw[(size_t) b] * 2, w = 2;
-                if (b > f0) { sm += raw[(size_t) b - 1]; w += 1; }
-                if (b < kNumBands - 1) { sm += raw[(size_t) b + 1]; w += 1; }
-                delta[(size_t) b] = std::clamp (sm / w, -18.0f, 6.0f);
+                float sm = u[(size_t) b] * 2, w = 2;
+                if (b > f0) { sm += u[(size_t) b - 1]; w += 1; }
+                if (b < kNumBands - 1) { sm += u[(size_t) b + 1]; w += 1; }
+                delta[(size_t) b] = sm / w + (bandCenters()[(size_t) b] > fs * 0.45 ? 0.0f : 3.0f);
             }
+            float alpha = 0;
+            if (p.hasSource && p.hasSibSource && p.hasSibTarget)
+            {
+                auto sumDb = [&] (auto fn) { double e = 0; for (int b = f0; b < kNumBands; ++b) e += std::pow (10.0, fn (b) / 10.0); return 10 * std::log10 (e + 1e-30); };
+                const double lTarget = sumDb ([&] (int b) { return (double) p.sibTarget[(size_t) (b - f0)]; });
+                auto post = [&] (int b, float a) { return (double) (p.sibSource[(size_t) (b - f0)] + corr[(size_t) b] + makeupDb - a * delta[(size_t) b]); };
+                const double lPost = sumDb ([&] (int b) { return post (b, 0.0f); });
+                const double want = std::max (0.0, lPost - lTarget) * std::clamp (p.deessAmount, 0.0f, 2.0f);
+                if (want > 0.05)
+                {
+                    float lo = 0, hi = 1;
+                    for (int it = 0; it < 30; ++it)
+                    {
+                        const float mid = 0.5f * (lo + hi);
+                        if (lPost - sumDb ([&] (int b) { return post (b, mid); }) < want) lo = mid; else hi = mid;
+                    }
+                    alpha = 0.5f * (lo + hi);
+                }
+                sibLevelInfo = { (float) lPost, (float) lTarget };
+            }
+            else alpha = std::clamp (p.deessAmount, 0.0f, 1.0f) * 0.75f;   // no learned s/z: take most of the lift back
+            for (int b = 0; b < kNumBands; ++b) delta[(size_t) b] = b >= f0 ? -alpha * delta[(size_t) b] : 0.0f;
+            sibAlpha = alpha;
             if (delta != lastSibDelta || ! sibValid) { deess.setDelta (delta, fs); lastSibDelta = delta; sibValid = true; }
         }
-        deess.amount = p.deessAmount * amt; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
+        deess.amount = 1.0f; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
         satDrive = dbToGain (p.satDriveDb); satMix = p.satMix * amt;
 
         delay.set (p.delayHpf, p.delayLpf);
@@ -1097,6 +1171,7 @@ public:
 
         duckEnvCoef = msToCoef (10.0f, fs);
         duckAtk = msToCoef (p.duckAttackMs, fs); duckRel = msToCoef (p.duckReleaseMs, fs);
+        phraseDecay = (float) (6.0 / fs);   // phrase reference falls 6 dB/s
     }
 
     float currentDelayMs() const { return p.delaySync ? noteMs (p.delayNote, p.bpm) : p.delayMs; }
@@ -1111,7 +1186,7 @@ public:
         {
             float l = L[i], r = R ? R[i] : L[i];
             pkIn = std::max (pkIn, std::max (std::abs (l), std::abs (r)));
-            learner.push (0.5f * (l + r));
+            const float rawMono = 0.5f * (l + r);
             l *= inGain; r *= inGain;
             const float preL = l, preR = r;
             l = eq.process (l, 0) * eqMakeup; r = eq.process (r, 1) * eqMakeup;
@@ -1120,12 +1195,27 @@ public:
             rmsEnv = rmsCoef * rmsEnv + (1 - rmsCoef) * e;
             holdEnv = holdCoef * holdEnv + (1 - holdCoef) * e;
             const bool pause = 10 * std::log10 (holdEnv + 1e-12f) < holdDb;
-            float g1 = c1.computeGain (pk, pause);
+            laL.push (l); laR.push (r);
+            const float laOutL = laL.read (lookahead - 1), laOutR = laR.read (lookahead - 1);
+            // Comp 1 (peak): with Punch it listens to the delayed signal, i.e. it reacts AFTER the start of a
+            // syllable instead of anticipating it, so consonant/onset transients pass (Suno's onsets stand
+            // out more than a look-ahead compressor allows). The leveler keeps its look-ahead.
+            const float pkNow = punchOn ? std::max (std::abs (laOutL), std::abs (laOutR)) : pk;
+            float g1 = c1.computeGain (pkNow, pause);
             float g2 = c2.computeGain (std::sqrt (rmsEnv) * g1, pause);   // RMS domain
             maxGr1 = std::max (maxGr1, c1.gr); maxGr2 = std::max (maxGr2, c2.gr);
             deess.detect (preL, preR, gainToDb (g1 * g2));     // 5 ms ahead of the audio it acts on
-            laL.push (l); laR.push (r);
-            l = laL.read (lookahead - 1) * g1 * g2; r = laR.read (lookahead - 1) * g1 * g2;
+            float gT = 1.0f;
+            if (punchAmt > 0)
+            {   // transient emphasis: fast envelope above slow envelope = a syllable is starting (detected 5 ms ahead)
+                trFast = e > trFast ? trFa * trFast + (1 - trFa) * e : trFr * trFast + (1 - trFr) * e;
+                trSlow = e > trSlow ? trSa * trSlow + (1 - trSa) * e : trSr * trSlow + (1 - trSr) * e;
+                const float tr = 10 * std::log10 ((trFast + 1e-12f) / (trSlow + 1e-12f));
+                const float want = pause ? 0.0f : std::clamp (tr, 0.0f, 12.0f) * 0.5f * punchAmt;
+                trGainDb = trSm * trGainDb + (1 - trSm) * want;
+                gT = dbToGain (trGainDb);
+            }
+            l = laOutL * g1 * g2 * gT; r = laOutR * g1 * g2 * gT;
             deess.apply (l, r);
             maxDs = std::max (maxDs, deess.currentCut());
             if (satMix > 0)
@@ -1157,6 +1247,13 @@ public:
             duckEnv = duckEnvCoef * duckEnv + (1 - duckEnvCoef) * mono * mono;
             float lvl = 10 * std::log10 (duckEnv + 1e-12f);
             float target = duckDepth * std::clamp ((lvl - presenceFloor) / 10.0f, 0.0f, 1.0f);
+            if (p.duckRelative)
+            {   // v1.5: also let go when the voice fades below its own phrase level (held endings, tuned tails),
+                // so the reverb blooms at the end of a phrase as in Suno, not only after real silence
+                phraseRef = lvl > phraseRef ? lvl : phraseRef - phraseDecay;
+                const float below = phraseRef - lvl;
+                target *= std::clamp (1.0f - (below - p.duckRelStartDb) / std::max (1.0f, p.duckRelRangeDb), 0.0f, 1.0f);
+            }
             duckGr = target > duckGr ? duckAtk * duckGr + (1 - duckAtk) * target : duckRel * duckGr + (1 - duckRel) * target;
             maxDuck = std::max (maxDuck, duckGr);
             float dg = dbToGain (-duckGr);
@@ -1164,6 +1261,7 @@ public:
             widthMeter.push (l, r);   // before the output gain: ratios only
             L[i] = l * outGain;
             if (R) R[i] = r * outGain;
+            learner.push (rawMono, 0.5f * (l + r));
             pkOut = std::max (pkOut, std::max (std::abs (L[i]), R ? std::abs (R[i]) : 0.0f));
         }
         mDelayMs = dlyMs; mDeess = maxDs;

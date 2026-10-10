@@ -7,11 +7,11 @@
 // drawer); the whole UI is scaled as one piece, so it stays sharp and proportional at any size.
 namespace ui
 {
-constexpr int kW = 1200, kH = 800, kDrawerH = 366;
+constexpr int kW = 1200, kH = 800, kSideW = 480;   // Advanced = side module on the right (v1.5)
 
 struct Images
 {
-    juce::Image faceplate, knob, knobLarge, pillLong, pillShort, buttonUp, buttonDown, slot;
+    juce::Image faceplate, sidePanel, knob, knobLarge, pillLong, pillShort, buttonUp, buttonDown, slot;
     static const Images& get();
 };
 
@@ -35,8 +35,8 @@ void drawCaps (juce::Graphics&, const juce::String& text, juce::Rectangle<float>
 class TextLink : public juce::Button
 {
 public:
-    explicit TextLink (const juce::String& t, float size = 12.5f) : juce::Button (t), fontSize (size) {}
-    bool underlineWhenOn = false;
+    explicit TextLink (const juce::String& t, float size = 15.0f) : juce::Button (t), fontSize (size) {}
+    bool underlineWhenOn = false, recording = false;
     juce::Colour onColour { 0xffffb35c };
     void paintButton (juce::Graphics&, bool over, bool down) override;
 private:
@@ -156,6 +156,7 @@ public:
 private:
     void timerCallback() override { root.tick(); }
     void applyLayout (bool advanced);
+    int logicalW = ui::kW;
     SunoChainProcessor& proc;
     ui::Root root;
     juce::ComponentBoundsConstrainer constrainer;
