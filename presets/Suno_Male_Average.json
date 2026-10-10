@@ -1,0 +1,219 @@
+{
+ "format": "SunoChainPreset",
+ "version": 5,
+ "name": "Suno Male Average",
+ "source_file": "average of vocal.wav, suno2.wav, suno3.wav, suno5.wav",
+ "eq": {
+  "target_curve_hz": [
+   50,
+   63,
+   80,
+   100,
+   125,
+   160,
+   200,
+   250,
+   315,
+   400,
+   500,
+   630,
+   800,
+   1000,
+   1250,
+   1600,
+   2000,
+   2500,
+   3150,
+   4000,
+   5000,
+   6300,
+   8000,
+   10000,
+   12500,
+   16000
+  ],
+  "target_curve_db": [
+   -31.36,
+   -28.3,
+   -26.66,
+   -23.08,
+   -17.08,
+   -5.69,
+   2.68,
+   8.3,
+   7.99,
+   2.64,
+   4.77,
+   7.83,
+   5.28,
+   1.96,
+   0.39,
+   -2.4,
+   -5.82,
+   -7.03,
+   -9.44,
+   -13.98,
+   -15.72,
+   -15.82,
+   -17.23,
+   -17.65,
+   -22.48,
+   -32.84
+  ],
+  "amount": 1.0,
+  "max_boost_db": 12.0,
+  "max_cut_db": 24.0,
+  "max_boost_high_db": 15.0
+ },
+ "dynamics": {
+  "target_crest_db": 8.8,
+  "target_spread400_db": 5.06,
+  "default_total_gr_db": 6.0,
+  "comp1": {
+   "ratio": 4.0,
+   "attack_ms": 2.0,
+   "release_ms": 50.0,
+   "share": 0.55
+  },
+  "comp2": {
+   "ratio": 4.0,
+   "attack_ms": 30.0,
+   "release_ms": 300.0
+  },
+  "leveler_factor": 2.1,
+  "punch": 1.5
+ },
+ "deesser": {
+  "method": "sz_match",
+  "sib_curve_hz": [
+   2000,
+   2500,
+   3150,
+   4000,
+   5000,
+   6300,
+   8000,
+   10000,
+   12500,
+   16000
+  ],
+  "sib_curve_db": [
+   -22.96,
+   -19.66,
+   -19.34,
+   -14.27,
+   -12.65,
+   -10.53,
+   -10.97,
+   -10.32,
+   -15.17,
+   -24.36
+  ],
+  "n_sib_segments": 49,
+  "split_hz": 4000.0,
+  "sib_median_db": -2.73,
+  "sib_p90_db": 3.54,
+  "n_sibilants": 55,
+  "ratio": 6.0,
+  "max_cut_db": 20.0
+ },
+ "saturation": {
+  "drive_db": 6.0,
+  "mix": 0.15,
+  "measured": false
+ },
+ "delay": {
+  "detected": false,
+  "on": false,
+  "time_ms": 375.0,
+  "feedback": 0.25,
+  "level_db": -18,
+  "hpf_hz": 300,
+  "lpf_hz": 5000,
+  "ping_pong": true,
+  "sync": true,
+  "note": 2,
+  "to_reverb": 0.5,
+  "band_width_db": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "width_layer": {
+  "on": true,
+  "level_db": -28.12,
+  "delay_ms": 1.0,
+  "shift_hz": 1.419,
+  "tilt_db": 1.305,
+  "hpf_hz": 131.92,
+  "lpf_hz": 16000.0,
+  "bloom_db": 40.0,
+  "bloom_ms": 138.395,
+  "side_only": true,
+  "band_db": [
+   9.36,
+   0.0,
+   6.13
+  ]
+ },
+ "multiband_width": {
+  "xover_low_hz": 300.0,
+  "xover_high_hz": 4000.0,
+  "note": "side-only gains per band (low/mid/high) for reverb, width layer and delay; mid/mono untouched"
+ },
+ "reverb": {
+  "on": true,
+  "predelay_ms": 186.5,
+  "rt60_s": 4.42,
+  "rt60_low_mul": 1.0,
+  "rt60_high_mul": 0.7,
+  "crossover_hz": 1500.0,
+  "size": 1.0,
+  "mod_depth": 0.5,
+  "diffusion": 0.75,
+  "diffusion_size": 2.0,
+  "early_ms": 22.0,
+  "early_level_db": -100.0,
+  "hpf_hz": 80.0,
+  "lpf_hz": 9000.0,
+  "bump_hz": 2000.0,
+  "bump_db": 2.62,
+  "width": 0.63,
+  "level_db": -7.04,
+  "band_width_db": [
+   -3.41,
+   0.02,
+   -9.74
+  ]
+ },
+ "ducking": {
+  "depth_db": 2.5,
+  "attack_ms": 5.0,
+  "release_ms": 90.91
+ },
+ "measurements": {
+  "suno": {
+   "width_meter_singing_db": [
+    -15.8,
+    -14.91,
+    -20.51
+   ],
+   "width_meter_pauses_db": [
+    -32.67,
+    -28.47,
+    -43.22
+   ]
+  },
+  "averaged_from": [
+   "Suno Male 01",
+   "Suno Male 02",
+   "Suno Male 03",
+   "Suno Male 05"
+  ]
+ },
+ "loudness": {
+  "integrated_lufs": -13.64,
+  "note": "ITU-R BS.1770 integrated loudness of the Suno vocal stem (reverb included); target of MATCH LOUDNESS"
+ }
+}
