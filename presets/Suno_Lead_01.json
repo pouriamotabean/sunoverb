@@ -1,486 +1,629 @@
 {
-  "format": "SunoChainPreset",
-  "version": 2,
-  "name": "Suno Lead 01",
-  "source_file": "vocal.wav",
-  "eq": {
-    "target_curve_hz": [
-      50,
-      63,
-      80,
-      100,
-      125,
-      160,
-      200,
-      250,
-      315,
-      400,
-      500,
-      630,
-      800,
-      1000,
-      1250,
-      1600,
-      2000,
-      2500,
-      3150,
-      4000,
-      5000,
-      6300,
-      8000,
-      10000,
-      12500,
-      16000
-    ],
-    "target_curve_db": [
-      -9.5,
-      -12.15,
-      -3.46,
-      -5.82,
-      -5.68,
-      1.45,
-      2.05,
-      10.47,
-      8.17,
-      2.0,
-      4.1,
-      6.42,
-      5.04,
-      1.04,
-      1.17,
-      -1.92,
-      -6.03,
-      -7.82,
-      -9.97,
-      -12.68,
-      -20.1,
-      -16.94,
-      -19.72,
-      -16.91,
-      -21.3,
-      -32.19
-    ],
-    "amount": 1.0,
-    "max_boost_db": 12.0,
-    "max_cut_db": 24.0
+ "format": "SunoChainPreset",
+ "version": 4,
+ "name": "Suno Lead 01",
+ "source_file": "vocal.wav",
+ "eq": {
+  "target_curve_hz": [
+   50,
+   63,
+   80,
+   100,
+   125,
+   160,
+   200,
+   250,
+   315,
+   400,
+   500,
+   630,
+   800,
+   1000,
+   1250,
+   1600,
+   2000,
+   2500,
+   3150,
+   4000,
+   5000,
+   6300,
+   8000,
+   10000,
+   12500,
+   16000
+  ],
+  "target_curve_db": [
+   -9.5,
+   -12.15,
+   -3.46,
+   -5.82,
+   -5.68,
+   1.45,
+   2.05,
+   10.47,
+   8.17,
+   2.0,
+   4.1,
+   6.42,
+   5.04,
+   1.04,
+   1.17,
+   -1.92,
+   -6.03,
+   -7.82,
+   -9.97,
+   -12.68,
+   -20.1,
+   -16.94,
+   -19.72,
+   -16.91,
+   -21.3,
+   -32.19
+  ],
+  "amount": 1.0,
+  "max_boost_db": 12.0,
+  "max_cut_db": 24.0,
+  "max_boost_high_db": 15.0
+ },
+ "dynamics": {
+  "target_crest_db": 8.98,
+  "target_spread400_db": 5.46,
+  "default_total_gr_db": 6.0,
+  "comp1": {
+   "ratio": 4.0,
+   "attack_ms": 2.0,
+   "release_ms": 50.0,
+   "share": 0.55
   },
-  "dynamics": {
-    "target_crest_db": 8.98,
-    "target_spread400_db": 5.46,
-    "default_total_gr_db": 6.0,
-    "comp1": {
-      "ratio": 4.0,
-      "attack_ms": 2.0,
-      "release_ms": 50.0,
-      "share": 0.55
-    },
-    "comp2": {
-      "ratio": 4.0,
-      "attack_ms": 30.0,
-      "release_ms": 300.0
-    },
-    "leveler_factor": 1.5
+  "comp2": {
+   "ratio": 4.0,
+   "attack_ms": 30.0,
+   "release_ms": 300.0
   },
-  "deesser": {
-    "freq_hz": 5500.0,
-    "target_ratio_db": -13.52,
-    "max_db": 8.0
-  },
-  "saturation": {
-    "drive_db": 6.0,
-    "mix": 0.15,
-    "measured": false
-  },
-  "delay": {
-    "detected": false,
-    "on": false,
-    "time_ms": 375.0,
-    "feedback": 0.25,
-    "level_db": -18,
-    "hpf_hz": 300,
-    "lpf_hz": 5000,
-    "ping_pong": true,
-    "sync": true,
-    "note": 2,
-    "to_reverb": 0.5
-  },
-  "width_layer": {
-    "on": true,
-    "level_db": -28.82,
-    "delay_ms": 1.0,
-    "shift_hz": 1.731,
-    "tilt_db": 4.76,
-    "hpf_hz": 156.11,
-    "lpf_hz": 16000.0,
-    "bloom_db": 18.93,
-    "bloom_ms": 183.82,
-    "side_only": true
-  },
-  "reverb": {
-    "on": true,
-    "predelay_ms": 205.0,
-    "rt60_s": 4.64,
-    "rt60_low_mul": 1.0,
-    "rt60_high_mul": 0.7,
-    "crossover_hz": 1500.0,
-    "size": 1.0,
-    "mod_depth": 2.5,
-    "diffusion": 0.75,
-    "diffusion_size": 2.0,
-    "early_ms": 22.0,
-    "early_level_db": -100.0,
-    "hpf_hz": 400.0,
-    "lpf_hz": 14000.0,
-    "bump_hz": 3150.0,
-    "bump_db": 4.5,
-    "width": 0.81,
-    "level_db": -0.44
-  },
-  "ducking": {
-    "depth_db": 13.41,
-    "attack_ms": 5.0,
-    "release_ms": 518.52
-  },
-  "measurements": {
-    "suno": {
-      "loudness_level_dbfs": -23.59,
-      "crest_db": 8.98,
-      "spread400_db": 5.46,
-      "wet_arrival_ms": 215.0,
-      "wet_rise_after_vocal_db": 6.78,
-      "wet_peak_re_dry_db": -10.15,
-      "side_minus_mid_in_gaps_db": -2.02,
-      "gap_decay": {
-        "slope_db_s": -9.42739793386623,
-        "n": 4,
-        "all": [
-          -21.2,
-          -12.7,
-          -6.2,
-          -3.8
-        ]
-      },
-      "wet_rise_short_pauses_db": 5.8,
-      "wet_rise_long_pauses_db": 10.3,
-      "wet_peak_time_long_ms": 340.0,
-      "side_minus_mid_singing_db": -17.38,
-      "side_minus_mid_section_start_db": -45.37,
-      "width_layer_coherence": {
-        "broad": 0.22156551511122888,
-        "bands": {
-          "250": 0.2478702345940006,
-          "500": 0.19441527665948027,
-          "1000": 0.1625396703581617,
-          "2000": 0.12082450267808031,
-          "4000": 0.1555748835971371
-        },
-        "k_ratio": 0.36408258287346934,
-        "bloom_ratio": 0.7036274293995833
-      },
-      "delay_detected": null
-    },
-    "render_with_preset": {
-      "wet_arrival_ms": 215.0,
-      "wet_rise_after_vocal_db": 8.56,
-      "wet_peak_re_dry_db": -8.75,
-      "side_minus_mid_in_gaps_db": -2.21,
-      "gap_decay": null,
-      "wet_rise_short_pauses_db": 7.51,
-      "wet_rise_long_pauses_db": 9.48,
-      "wet_peak_time_long_ms": 462.5,
-      "side_minus_mid_singing_db": -17.49,
-      "side_minus_mid_section_start_db": -44.59,
-      "width_layer_coherence": {
-        "broad": 0.212856046734687,
-        "bands": {
-          "250": 0.16366961112556427,
-          "500": 0.13675314448830653,
-          "1000": 0.13431473600425767,
-          "2000": 0.09954067166790605,
-          "4000": 0.08451037496498798
-        },
-        "k_ratio": 0.3232137296903699,
-        "bloom_ratio": 0.6569225252078028
-      }
-    },
-    "wet_curve_suno_db": [
-      -18.45,
-      -19.4,
-      -21.35,
-      -20.27,
-      -17.71,
-      -15.07,
-      -11.15,
-      -8.25,
-      -4.05,
-      -0.1,
-      -0.97,
-      -1.79,
-      -0.79,
-      0.62,
-      1.59,
-      2.41,
-      4.3,
-      3.94,
-      1.37,
-      1.72,
-      1.77,
-      -1.79,
-      -4.05,
-      -4.53,
-      -5.48,
-      -6.9
-    ],
-    "wet_curve_render_db": [
-      -19.16,
-      -19.9,
-      -21.94,
-      -21.08,
-      -19.76,
-      -19.01,
-      -14.2,
-      -8.46,
-      -4.19,
-      -0.85,
-      -0.6,
-      -1.02,
-      0.34,
-      1.6,
-      1.95,
-      2.23,
-      3.02,
-      3.14,
-      2.22,
-      0.61,
-      -1.25,
-      -2.38,
-      -3.35,
-      -4.75,
-      -6.94,
-      -9.25
-    ],
-    "fit_history": [
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": -1.821,
-        "rise_short": -1.807,
-        "sing_width": -2.158,
-        "gap_width": -1.477,
-        "rt": 1.161,
-        "layer": 2.003,
-        "k_ratio": 0.233,
-        "early_side": 131.106,
-        "bloom": 0.281
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 0.965,
-        "rise_short": -0.371,
-        "sing_width": 0.05,
-        "gap_width": -0.767,
-        "rt": 0.974,
-        "layer": 2.075,
-        "k_ratio": 0.236,
-        "early_side": 131.106,
-        "bloom": 0.273
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 0.963,
-        "rise_short": -0.338,
-        "sing_width": 0.723,
-        "gap_width": -0.22,
-        "rt": 1.02,
-        "layer": 2.097,
-        "k_ratio": 0.237,
-        "early_side": 131.106,
-        "bloom": 0.232
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 1.28,
-        "rise_short": -0.344,
-        "sing_width": 0.984,
-        "gap_width": -0.043,
-        "rt": 1.042,
-        "layer": 2.111,
-        "k_ratio": 0.237,
-        "early_side": 131.106,
-        "bloom": 0.236
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 1.147,
-        "rise_short": -0.303,
-        "sing_width": 0.862,
-        "gap_width": -0.035,
-        "rt": 1.056,
-        "layer": 2.1,
-        "k_ratio": 0.235,
-        "early_side": 131.106,
-        "bloom": 0.229
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 1.11,
-        "rise_short": -0.252,
-        "sing_width": 0.767,
-        "gap_width": -0.032,
-        "rt": 1.058,
-        "layer": 2.076,
-        "k_ratio": 0.233,
-        "early_side": 131.106,
-        "bloom": 0.252
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 1.112,
-        "rise_short": -0.202,
-        "sing_width": 0.698,
-        "gap_width": -0.038,
-        "rt": 1.056,
-        "layer": 2.077,
-        "k_ratio": 0.234,
-        "early_side": 131.106,
-        "bloom": 0.24
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 1.124,
-        "rise_short": -0.155,
-        "sing_width": 0.665,
-        "gap_width": -0.011,
-        "rt": 1.122,
-        "layer": 2.062,
-        "k_ratio": 0.229,
-        "early_side": 131.106,
-        "bloom": 0.243
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 0.34,
-        "rise_short": -0.123,
-        "sing_width": 0.686,
-        "gap_width": 0.067,
-        "rt": 1.063,
-        "layer": 2.046,
-        "k_ratio": 0.221,
-        "early_side": 131.106,
-        "bloom": 0.241
-      },
-      {
-        "stage": "A",
-        "arrival": 0.0,
-        "rise_long": 0.323,
-        "rise_short": -0.149,
-        "sing_width": 0.438,
-        "gap_width": 0.004,
-        "rt": 1.022,
-        "layer": 2.024,
-        "k_ratio": 0.218,
-        "early_side": 131.106,
-        "bloom": 0.225
-      },
-      {
-        "stage": "B",
-        "arrival": 215.0,
-        "rise_long": -0.057,
-        "rise_short": -0.121,
-        "sing_width": 1.206,
-        "gap_width": 0.117,
-        "rt": 9.427,
-        "layer": -0.184,
-        "k_ratio": -0.179,
-        "early_side": -6.092,
-        "bloom": -0.04
-      },
-      {
-        "stage": "B",
-        "arrival": 215.0,
-        "rise_long": 0.114,
-        "rise_short": 0.002,
-        "sing_width": 1.211,
-        "gap_width": 0.004,
-        "rt": 1.022,
-        "layer": -0.022,
-        "k_ratio": -0.004,
-        "early_side": -5.464,
-        "bloom": 0.082
-      },
-      {
-        "stage": "B",
-        "arrival": 215.0,
-        "rise_long": 0.48,
-        "rise_short": -0.431,
-        "sing_width": 1.178,
-        "gap_width": 0.004,
-        "rt": 1.022,
-        "layer": -0.065,
-        "k_ratio": 0.021,
-        "early_side": -0.778,
-        "bloom": 0.031
-      },
-      {
-        "stage": "B",
-        "arrival": 215.0,
-        "rise_long": 0.608,
-        "rise_short": -0.03,
-        "sing_width": 1.169,
-        "gap_width": -0.014,
-        "rt": 1.022,
-        "layer": -0.083,
-        "k_ratio": 0.001,
-        "early_side": -5.357,
-        "bloom": 0.007
-      },
-      {
-        "stage": "B",
-        "arrival": 215.0,
-        "rise_long": -0.272,
-        "rise_short": 0.182,
-        "sing_width": 1.201,
-        "gap_width": 0.205,
-        "rt": 9.427,
-        "layer": -0.012,
-        "k_ratio": 0.005,
-        "early_side": -1.637,
-        "bloom": 0.016
-      },
-      {
-        "stage": "B",
-        "arrival": 215.0,
-        "rise_long": 0.859,
-        "rise_short": -0.013,
-        "sing_width": 1.183,
-        "gap_width": 0.004,
-        "rt": 1.022,
-        "layer": -0.014,
-        "k_ratio": -0.003,
-        "early_side": -4.204,
-        "bloom": 0.123
-      },
-      {
-        "stage": "B",
-        "arrival": 215.0,
-        "rise_long": -0.087,
-        "rise_short": -0.203,
-        "sing_width": 1.174,
-        "gap_width": 0.134,
-        "rt": 9.427,
-        "layer": -0.098,
-        "k_ratio": -0.007,
-        "early_side": -6.422,
-        "bloom": 0.103
-      }
+  "leveler_factor": 2.1,
+  "punch": 1.5
+ },
+ "deesser": {
+  "method": "sz_match",
+  "sib_curve_hz": [
+   2000,
+   2500,
+   3150,
+   4000,
+   5000,
+   6300,
+   8000,
+   10000,
+   12500,
+   16000
+  ],
+  "sib_curve_db": [
+   -25.18,
+   -26.2,
+   -23.47,
+   -16.63,
+   -16.35,
+   -15.0,
+   -15.38,
+   -11.27,
+   -14.66,
+   -23.78
+  ],
+  "n_sib_segments": 52,
+  "split_hz": 4000.0,
+  "sib_median_db": -2.5,
+  "sib_p90_db": 4.18,
+  "n_sibilants": 59,
+  "ratio": 6.0,
+  "max_cut_db": 20.0
+ },
+ "saturation": {
+  "drive_db": 6.0,
+  "mix": 0.15,
+  "measured": false
+ },
+ "delay": {
+  "detected": false,
+  "on": false,
+  "time_ms": 375.0,
+  "feedback": 0.25,
+  "level_db": -18,
+  "hpf_hz": 300,
+  "lpf_hz": 5000,
+  "ping_pong": true,
+  "sync": true,
+  "note": 2,
+  "to_reverb": 0.5,
+  "band_width_db": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "width_layer": {
+  "on": true,
+  "level_db": -28.5,
+  "delay_ms": 1.0,
+  "shift_hz": 1.453,
+  "tilt_db": 4.41,
+  "hpf_hz": 150.58,
+  "lpf_hz": 16000.0,
+  "bloom_db": 26.55,
+  "bloom_ms": 187.33,
+  "side_only": true,
+  "band_db": [
+   6.81,
+   0.0,
+   0.63
+  ]
+ },
+ "multiband_width": {
+  "xover_low_hz": 300.0,
+  "xover_high_hz": 4000.0,
+  "note": "side-only gains per band (low/mid/high) for reverb, width layer and delay; mid/mono untouched"
+ },
+ "reverb": {
+  "on": true,
+  "predelay_ms": 205.0,
+  "rt60_s": 4.64,
+  "rt60_low_mul": 1.0,
+  "rt60_high_mul": 0.7,
+  "crossover_hz": 1500.0,
+  "size": 1.0,
+  "mod_depth": 0.5,
+  "diffusion": 0.75,
+  "diffusion_size": 2.0,
+  "early_ms": 22.0,
+  "early_level_db": -100.0,
+  "hpf_hz": 400.0,
+  "lpf_hz": 14000.0,
+  "bump_hz": 3150.0,
+  "bump_db": 4.5,
+  "width": 0.88,
+  "level_db": -5.5,
+  "band_width_db": [
+   -3.21,
+   3.5,
+   -13.41
+  ]
+ },
+ "ducking": {
+  "depth_db": 12.26,
+  "attack_ms": 5.0,
+  "release_ms": 338.35
+ },
+ "measurements": {
+  "suno": {
+   "loudness_level_dbfs": -23.59,
+   "crest_db": 8.98,
+   "spread400_db": 5.46,
+   "wet_arrival_ms": 215.0,
+   "wet_rise_after_vocal_db": 6.78,
+   "wet_peak_re_dry_db": -10.15,
+   "side_minus_mid_in_gaps_db": -2.02,
+   "gap_decay": {
+    "slope_db_s": -9.42739793386623,
+    "n": 4,
+    "all": [
+     -21.2,
+     -12.7,
+     -6.2,
+     -3.8
     ]
-  }
+   },
+   "wet_rise_short_pauses_db": 5.8,
+   "wet_rise_long_pauses_db": 10.3,
+   "wet_peak_time_long_ms": 340.0,
+   "side_minus_mid_singing_db": -17.38,
+   "side_minus_mid_section_start_db": -45.37,
+   "width_layer_coherence": {
+    "broad": 0.22156551511122888,
+    "bands": {
+     "250": 0.2478702345940006,
+     "500": 0.19441527665948027,
+     "1000": 0.1625396703581617,
+     "2000": 0.12082450267808031,
+     "4000": 0.1555748835971371
+    },
+    "k_ratio": 0.36408258287346934,
+    "bloom_ratio": 0.7036274293995833
+   },
+   "delay_detected": null,
+   "width_bands_singing_db": [
+    -19.46,
+    -16.35,
+    -20.31
+   ],
+   "width_bands_pauses_db": [
+    -5.34,
+    0.12,
+    -15.18
+   ],
+   "width_fit_bands_singing_db": [
+    -19.11,
+    -15.96,
+    -24.56
+   ],
+   "width_fit_bands_pauses_db": [
+    -7.14,
+    0.3,
+    -16.78
+   ],
+   "width_meter_singing_db": [
+    -18.95,
+    -15.75,
+    -24.27
+   ],
+   "width_meter_pauses_db": [
+    -8.91,
+    -0.16,
+    -16.58
+   ]
+  },
+  "render_with_preset": {
+   "wet_arrival_ms": 215.0,
+   "wet_rise_after_vocal_db": 8.05,
+   "wet_peak_re_dry_db": -9.68,
+   "side_minus_mid_in_gaps_db": 1.21,
+   "gap_decay": {
+    "slope_db_s": -3.6399109204269022,
+    "n": 2,
+    "all": [
+     -2.5,
+     -4.8
+    ]
+   },
+   "wet_rise_short_pauses_db": 6.08,
+   "wet_rise_long_pauses_db": 10.3,
+   "wet_peak_time_long_ms": 422.5,
+   "side_minus_mid_singing_db": -18.04,
+   "side_minus_mid_section_start_db": -44.27,
+   "width_layer_coherence": {
+    "broad": 0.32048421972166213,
+    "bands": {
+     "250": 0.31145167801416784,
+     "500": 0.20226185549212217,
+     "1000": 0.16075072005241514,
+     "2000": 0.11827364702929938,
+     "4000": 0.1582534534122542
+    },
+    "k_ratio": 0.4435640431035765,
+    "bloom_ratio": 0.6868947317682721
+   },
+   "width_bands_singing_db": [
+    -23.57,
+    -17.57,
+    -22.2
+   ],
+   "width_bands_pauses_db": [
+    -6.68,
+    0.59,
+    -7.43
+   ],
+   "width_fit_bands_singing_db": [
+    -23.2,
+    -16.19,
+    -24.69
+   ],
+   "width_fit_bands_pauses_db": [
+    -6.9,
+    0.99,
+    -15.66
+   ]
+  },
+  "wet_curve_suno_db": [
+   -18.45,
+   -19.4,
+   -21.35,
+   -20.27,
+   -17.71,
+   -15.07,
+   -11.15,
+   -8.25,
+   -4.05,
+   -0.1,
+   -0.97,
+   -1.79,
+   -0.79,
+   0.62,
+   1.59,
+   2.41,
+   4.3,
+   3.94,
+   1.37,
+   1.72,
+   1.77,
+   -1.79,
+   -4.05,
+   -4.53,
+   -5.48,
+   -6.9
+  ],
+  "wet_curve_render_db": [
+   -16.38,
+   -17.38,
+   -19.6,
+   -19.32,
+   -19.51,
+   -20.2,
+   -16.27,
+   -11.08,
+   -6.66,
+   -2.54,
+   -0.26,
+   1.06,
+   2.17,
+   2.93,
+   3.08,
+   3.31,
+   3.97,
+   3.55,
+   1.83,
+   -1.36,
+   -6.23,
+   -11.26,
+   -15.2,
+   -17.71,
+   -16.95,
+   -13.57
+  ],
+  "fit_history": [
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": 0.562,
+    "rise_short": -2.089,
+    "sing_width": -0.648,
+    "gap_width": -1.625,
+    "rt": 9.427,
+    "layer": 1.829,
+    "k_ratio": 0.208,
+    "early_side": 130.181,
+    "bloom": 0.045
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": 0.742,
+    "rise_short": -1.873,
+    "sing_width": 0.741,
+    "gap_width": -0.739,
+    "rt": 9.427,
+    "layer": 1.854,
+    "k_ratio": 0.201,
+    "early_side": 130.181,
+    "bloom": 0.108
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": 1.305,
+    "rise_short": -1.36,
+    "sing_width": 1.049,
+    "gap_width": -0.189,
+    "rt": 9.427,
+    "layer": 1.855,
+    "k_ratio": 0.196,
+    "early_side": 130.181,
+    "bloom": 0.125
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": 1.678,
+    "rise_short": -1.1,
+    "sing_width": 0.988,
+    "gap_width": -0.062,
+    "rt": 9.427,
+    "layer": 1.857,
+    "k_ratio": 0.192,
+    "early_side": 130.181,
+    "bloom": 0.116
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": 1.991,
+    "rise_short": -0.839,
+    "sing_width": 0.955,
+    "gap_width": -0.023,
+    "rt": 9.427,
+    "layer": 1.85,
+    "k_ratio": 0.188,
+    "early_side": 130.181,
+    "bloom": 0.133
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": 2.259,
+    "rise_short": -0.471,
+    "sing_width": 0.983,
+    "gap_width": -0.014,
+    "rt": 9.427,
+    "layer": 1.843,
+    "k_ratio": 0.184,
+    "early_side": 130.181,
+    "bloom": 0.129
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -1.38,
+     1.87,
+     -12.32
+    ]
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -1.07,
+     1.05,
+     -2.1
+    ]
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -1.12,
+     0.97,
+     -0.47
+    ]
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -0.36,
+     0.93,
+     1.27
+    ]
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     3.07,
+     1.85,
+     2.38
+    ]
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": 2.024,
+    "rise_short": -0.981,
+    "sing_width": -0.522,
+    "gap_width": -2.845,
+    "rt": 9.427,
+    "layer": -0.073,
+    "k_ratio": -0.102,
+    "early_side": -5.741,
+    "bloom": -0.021
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": 1.691,
+    "rise_short": -1.567,
+    "sing_width": -0.553,
+    "gap_width": -2.707,
+    "rt": 9.427,
+    "layer": -0.059,
+    "k_ratio": -0.032,
+    "early_side": -5.796,
+    "bloom": 0.024
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": 2.215,
+    "rise_short": -1.254,
+    "sing_width": -0.549,
+    "gap_width": -2.782,
+    "rt": 9.427,
+    "layer": 0.006,
+    "k_ratio": 0.01,
+    "early_side": -4.009,
+    "bloom": 0.03
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": 1.848,
+    "rise_short": -1.389,
+    "sing_width": -0.555,
+    "gap_width": -2.777,
+    "rt": 9.427,
+    "layer": 0.002,
+    "k_ratio": -0.009,
+    "early_side": -0.637,
+    "bloom": 0.065
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": 1.998,
+    "rise_short": -1.467,
+    "sing_width": -0.542,
+    "gap_width": -2.782,
+    "rt": 9.427,
+    "layer": -0.095,
+    "k_ratio": 0.01,
+    "early_side": -1.539,
+    "bloom": 0.039
+   },
+   {
+    "stage": "D-low",
+    "err": 5.38
+   },
+   {
+    "stage": "D-low",
+    "err": 1.43
+   },
+   {
+    "stage": "E",
+    "band_err": [
+     3.61,
+     -0.62,
+     0.28
+    ]
+   },
+   {
+    "stage": "E",
+    "band_err": [
+     3.88,
+     -0.15,
+     0.44
+    ]
+   },
+   {
+    "stage": "F",
+    "band_err": [
+     3.94,
+     -0.06,
+     0.47
+    ]
+   },
+   {
+    "stage": "F",
+    "band_err": [
+     3.94,
+     -0.06,
+     0.07
+    ]
+   },
+   {
+    "stage": "F",
+    "band_err": [
+     3.94,
+     -0.06,
+     0.01
+    ]
+   },
+   {
+    "stage": "G",
+    "early_side": -3.6
+   },
+   {
+    "stage": "G",
+    "early_side": -2.78
+   },
+   {
+    "stage": "G",
+    "early_side": -2.31
+   },
+   {
+    "stage": "H",
+    "rise_long": 1.89
+   },
+   {
+    "stage": "H",
+    "rise_long": 0.9
+   }
+  ],
+  "note": "v1.5 fit (Oct 10, 2026): reverb character kept from v1.2 (approved by ear), reverb modulation 0.5 (2.5 detuned the tail), relative ducking; layer low band from Suno's coherence share (the rest of Suno's low side is uncorrelated); final reverb level trimmed to -5.5 after the fit."
+ },
+ "loudness": {
+  "integrated_lufs": -19.41,
+  "note": "ITU-R BS.1770 integrated loudness of the Suno vocal stem (reverb included); target of MATCH LOUDNESS"
+ }
 }
