@@ -1,6 +1,9 @@
 # Suno Chain – Roadmap
 
 **Done in v1.2:** S/Z balance (EQ no longer makes "s"/"z" ~10 dB louder), de-ess meter, compression calibrated on an uncompressed vocal.
+**Done in v1.10:** LISTEN (wet / width solo), ear-calibrated stage-1 presets (Male 01/02/03/05/Average + POURIA SUNO VERB 2), Match Loudness peak cap, mandatory real-plugin regression before delivery. Stage 1 analyzer: --exclude ranges, phrase-end detection fixed for mono-tailed stems. Male 04 rejected (doubles throughout).
+**Done in v1.11:** stage 2 harmonic exciter (SATURATION + AIR), fitted to the Suno average; key select dropped (shaping a sung note only yields its own harmonics).
+**Next:** width envelope (Suno: highs ~4.5 dB narrower in the first 50 ms of each note; low band 6-7 dB wider than ours while singing; phrase tails open +7 dB low/mid at once, highs after ~150 ms; our tails 4-7 dB too wide in the mid band). After Suno Chain: one-button screen + master-audio recorder plugin (1080p MP4 with sound, auto latency sync).
 **Done in v1.9:** sibilant ceiling off (it ate s/sh/ch), S/Z never darker than the raw voice. Open: the voiced "z" (+3 dB) needs a fix that is verified in the real plugin, not only offline.
 **Done in v1.8:** per-sibilant ceiling (single loud s/z), voiced z detection, **Match Loudness (stage 3)**.
 **Done in v1.7:** natural vocal compressor (always on, no look-ahead, holds on consonants/breaths, Punch removed, Attack knob), per-band S/Z Match (keeps the "s" air).

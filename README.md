@@ -1,4 +1,4 @@
-# Suno Chain v1.9
+# Suno Chain v1.11
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -6,6 +6,18 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
 1. Replace the `Source/` folder in the repo with the one from this zip (`CMakeLists.txt` and `.github/workflows/build.yml` have not changed since the VS2026 fix; replacing everything is fine too).
 2. Push → **Actions** → when it's green, download **SunoChain-VST3** → copy it to `C:\Program Files\Common Files\VST3` → rescan in Cubase.
 3. If it's red, send me the log.
+
+## New in v1.11 (harmonic saturation, stage 2)
+- **SATURATION is now a harmonic exciter** (the old tanh saturation is gone). Measured on the 4 Suno vocals vs your voice after the chain: Suno's vowels have ~2 dB more *harmonic* energy at 4-8 kHz and ~4 dB more air at 10-16 kHz. Two bands of your voice (2-4.5 kHz and 5-8 kHz) go through Chebyshev shapers that add the octave and octave+fifth of what goes in, level-normalised (same amount loud or soft), gated off on s/z/sh/ch and breaths. At 100 % it lands on Suno's average: air -19.2 dB (Suno -19.1), harmonic ratio 4-8 kHz 6.9 dB (Suno 7.0), 8-12 kHz 4.7 (4.8).
+- **Advanced > AIR** (+/-12 dB): more or less of the top band only. (Replaces Sat Drive.)
+- **Key selection**: not needed for this design. A sung note is periodic, so shaping it can only create harmonics of that same note (the natural harmonic series of the voice), never notes outside the key. A key selector only matters if notes are added that are not harmonics (harmonizer / pitch-shift), which we do not do.
+- Checked with the real plugin on your takes: consonants +0.2 to +0.7 dB vs v1.10 (never darker).
+
+## New in v1.10 (LISTEN + ear-calibrated presets)
+- **LISTEN** (bottom bar, click to step): ALL = normal; **WET** = only reverb + echo, *after* the ducking (the main line removed, so you hear exactly what the space adds); **WIDTH** = only the width layer. Blinks while soloing; never saved with the session or preset.
+- **New presets**, calibrated by ear from your edit (POURIA SUNO VERB): reverb -6.4 dB, ducking +3.9 dB with a slower release, decay x0.8, reverb low cut at least 300 Hz, built-in saturation off, and a low-end floor so a Suno stem with a steep high-pass is not copied (that made Male 02 sound like a telephone). Includes **POURIA SUNO VERB 2** = your preset with the reverb HPF at 300 Hz. Tool: `tools/calibrate_preset.py`.
+- **Match Loudness** never pushes peaks over -1 dBFS (the new Suno stems are mastered ~6 dB louder).
+- Every release is now checked with the real plugin code on your takes (44.1 kHz, 2x Learn) before delivery; consonant levels may not drop more than 1.5 dB against the previous version.
 
 ## New in v1.9 (S/Z fix)
 - **The v1.8 "sibilant ceiling" is switched off.** In the plugin it pulled s/sh/ch 3-10 dB down (the 2-5 kHz body of "sh/ch" up to 9 dB), so words lost their consonants. The voiced-z detector from v1.8 is off too. S/Z is back to the v1.7 behaviour you found fine.
