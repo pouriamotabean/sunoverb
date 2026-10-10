@@ -55,6 +55,14 @@ public:
     bool hasLearned() const;
     void clearLearn();
 
+    // Match Loudness (v1.8, message thread): measure the output while you play, then hold the gain that
+    // brings it to the Suno vocal's loudness (from the preset). Press again to re-measure.
+    void startLoudMatch();
+    bool stopLoudMatch (juce::String& message);
+    bool isLoudMatching() const { return chain.loud.active.load(); }
+    double loudSeconds() const { return chain.loud.seconds(); }
+    float getTargetLufs() const { const juce::SpinLock::ScopedLockType sl (presetLock); return targetLufs; }
+
     // for the editor (message thread)
     struct CurveSnapshot
     {
@@ -85,6 +93,7 @@ private:
     bool presetLoaded = false;
     std::array<float, 3> widthTargetSing {}, widthTargetGap {};   // Suno width per band (for the WIDTH graph)
     bool hasWidthTarget = false;
+    float targetLufs = -19.41f;        // Suno vocal integrated loudness (Suno Lead 01 = -19.4 LUFS)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SunoChainProcessor)
 };

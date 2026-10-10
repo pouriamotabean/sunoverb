@@ -180,6 +180,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     for (auto [id, name] : std::vector<std::pair<const char*, const char*>> { { "dynPeak", "Peak Comp" }, { "dynLeveler", "Leveler" },
                                                                                { "dynSpeed", "Comp Speed" }, { "dynPunch", "Attack" } })   // v1.7: dynPunch = opto attack (ID kept for saved sessions)
         p.push_back (std::make_unique<APF> (juce::ParameterID { id, 4 }, name, NRange (0, 200), 100.0f, pct));
+    // v1.8: Match Loudness gain (set by the MATCH LOUDNESS button, then held; adjustable)
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "loudGain", 5 }, "Loudness Match", NRange (-24, 24), 0.0f, dB));
     return { p.begin(), p.end() };
 }
 
@@ -256,6 +258,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.speedScale = juce::jmax (0.25f, v ("dynSpeed") / 100.0f);
     p.punch = 0.0f;                                            // v1.7: onset shaper removed
     p.attackScale = juce::jmax (0.25f, v ("dynPunch") / 100.0f);   // 100 % = 10 ms
+    p.loudGainDb = v ("loudGain");
     p.bpm = (float) hostBpm.load();
     return p;
 }
@@ -380,7 +383,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         j = juce::JSON::parse (juce::JSON::toString (presetJson.isObject() ? presetJson : juce::var (new juce::DynamicObject())));
         if (! j.isObject()) j = juce::var (new juce::DynamicObject());
         put (j, "format", "SunoChainPreset");
-        put (j, "version", 4);
+        put (j, "version", 5);
         put (j, "dynamics.punch", hidden.punch);
         put (j, "name", f.getFileNameWithoutExtension());
         juce::Array<juce::var> curve;
@@ -389,6 +392,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         put (j, "dynamics.target_crest_db", hidden.targetCrestDb);
         put (j, "dynamics.target_spread400_db", hidden.targetSpreadDb);
         put (j, "dynamics.leveler_factor", hidden.levelerFactor);
+        put (j, "loudness.integrated_lufs", targetLufs);
         put (j, "deesser.method", "sz_match");
         put (j, "deesser.sib_curve_db", toVarArray (hidden.sibTarget));
         put (j, "multiband_width.xover_low_hz", hidden.xoverLowHz);
@@ -470,6 +474,7 @@ void SunoChainProcessor::restorePresetFromTree()
     hidden.levelerFactor  = (float) (v4 ? num (j, "dynamics.leveler_factor", 2.1) : 2.1);
     hidden.punch          = (float) (v4 ? num (j, "dynamics.punch", 1.5) : 1.5);
     hidden.eqMaxBoostHighDb = (float) num (j, "eq.max_boost_high_db", 15.0);
+    targetLufs = (float) num (j, "loudness.integrated_lufs", -19.41);
     hidden.compTotalGrDb  = (float) num (j, "dynamics.default_total_gr_db", 6.0);
     hidden.comp1Ratio     = (float) num (j, "dynamics.comp1.ratio", 4.0);
     hidden.comp1AttackMs  = (float) num (j, "dynamics.comp1.attack_ms", 2.0);
@@ -569,6 +574,25 @@ bool SunoChainProcessor::stopLearn (juce::String& message)
               + " dB, spread " + juce::String (spread, 1) + " dB, "
               + (nSib >= 3 ? juce::String (nSib) + " s/z sounds" : juce::String ("too few s/z sounds (learn a longer part)"))
               + ". RE-LEARN once more to refine the EQ.";
+    return true;
+}
+
+void SunoChainProcessor::startLoudMatch() { chain.loud.start(); }
+
+bool SunoChainProcessor::stopLoudMatch (juce::String& message)
+{
+    chain.loud.stop();
+    const float measured = chain.loud.integrated();
+    if (chain.loud.seconds() < 5.0 || measured < -69.0f)
+    {
+        message = "Not enough audio measured - play at least ~10 s of the vocal, then stop.";
+        return false;
+    }
+    const float target = getTargetLufs();
+    const float gain = juce::jlimit (-24.0f, 24.0f, target - measured);   // measured before this gain: absolute, not added
+    if (auto* prm = apvts.getParameter ("loudGain")) prm->setValueNotifyingHost (prm->convertTo0to1 (gain));
+    message = "Loudness: measured " + juce::String (measured, 1) + " LUFS, Suno " + juce::String (target, 1)
+              + " LUFS -> " + (gain >= 0 ? "+" : "") + juce::String (gain, 1) + " dB, held.";
     return true;
 }
 

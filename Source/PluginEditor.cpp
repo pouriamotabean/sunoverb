@@ -432,7 +432,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     setLookAndFeel (&lnf);
     setOpaque (true);
     addAndMakeVisible (display); addAndMakeVisible (meters); addAndMakeVisible (pill);
-    for (auto* b : { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB }) addAndMakeVisible (*b);
+    for (auto* b : { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB, &matchB }) addAndMakeVisible (*b);
     eqTab.underlineWhenOn = widthTab.underlineWhenOn = true;
     eqTab.setToggleState (true, juce::dontSendNotification);
     eqTab.onClick = [this] { display.setMode (0); eqTab.setToggleState (true, juce::dontSendNotification); widthTab.setToggleState (false, juce::dontSendNotification); };
@@ -442,6 +442,8 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     learnB.onClick = [this] { toggleLearn(); };
     clearB.onClick = [this] { proc.clearLearn(); statusText = "Learned voice cleared."; };
     advancedB.onClick = [this] { setAdvanced (! proc.advancedOpen); };
+    matchB.onClick = [this] { toggleLoudMatch(); };
+    matchB.setTooltip ("Measures your output while you play, then holds the gain that matches the Suno vocal's loudness");
     pill.onPrev = [this] { stepPreset (-1); };
     pill.onNext = [this] { stepPreset (1); };
     pill.onClick = [this] { loadPreset(); };
@@ -467,7 +469,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     // Advanced drawer
     struct D { const char* id; const char* name; bool violet; };
     for (const auto& d : std::vector<D> {
-            { "eqLow", "Low Boost", false }, { "satDrive", "Sat Drive", false }, { "output", "Output", false },
+            { "eqLow", "Low Boost", false }, { "satDrive", "Sat Drive", false }, { "loudGain", "Loudness", false }, { "output", "Output", false },
             { "dynPeak", "Peak", false }, { "dynLeveler", "Leveler", false }, { "dynSpeed", "Speed", false }, { "dynPunch", "Attack", false },
             { "width", "Width", false }, { "wetHpf", "HPF", false }, { "wetLpf", "LPF", false }, { "duckRel", "Duck Rel", false },
             { "rwLow", "Low", false }, { "rwMid", "Mid", false }, { "rwHigh", "High", false },
@@ -478,7 +480,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
         drawerIds.push_back (d.id);
     }
 
-    for (auto id : { "rwLow", "rwMid", "rwHigh", "lwLow", "lwMid", "lwHigh", "dwLow", "dwMid", "dwHigh", "output", "wTone" })
+    for (auto id : { "rwLow", "rwMid", "rwHigh", "lwLow", "lwMid", "lwHigh", "dwLow", "dwMid", "dwHigh", "output", "wTone", "loudGain" })
         knobs[id]->slider.getProperties().set ("bipolar", true);
     revLamp.colour = echoLamp.colour = col::amber; widthLamp.colour = col::violet;
     for (auto* l : { &revLamp, &widthLamp, &echoLamp }) addAndMakeVisible (*l);
@@ -567,7 +569,7 @@ void Root::paint (juce::Graphics& g)
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
         drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.7", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v1.8", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
     }
     // section titles
     drawCaps (g, "Tone", { 70, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
@@ -625,13 +627,14 @@ void Root::resized()
     echoLamp.setBounds (910, 441, 20, 20);
     delayInfo.setBounds (940, 442, 192, 18);
 
-    status.setBounds (120, 742, 700, 20);
+    status.setBounds (120, 742, 600, 20);
+    matchB.setBounds (742, 738, 200, 28);
     advancedB.setBounds (960, 738, 140, 28);
 
     // Advanced side module (x 1200-1680): columns and rows inside its four sections
     const float c[4] { kW + 80.0f, kW + 180.0f, kW + 280.0f, kW + 380.0f };
     const int ks = 40;
-    placeKnob ("eqLow", c[0], 64, ks); placeKnob ("satDrive", c[1], 64, ks); placeKnob ("output", c[3], 64, ks);
+    placeKnob ("eqLow", c[0], 64, ks); placeKnob ("satDrive", c[1], 64, ks); placeKnob ("loudGain", c[2], 64, ks); placeKnob ("output", c[3], 64, ks);
     placeKnob ("dynPeak", c[0], 144, ks); placeKnob ("dynLeveler", c[1], 144, ks); placeKnob ("dynSpeed", c[2], 144, ks); placeKnob ("dynPunch", c[3], 144, ks);
     placeKnob ("width", c[0], kSec[1] + 62, ks); placeKnob ("wetHpf", c[1], kSec[1] + 62, ks); placeKnob ("wetLpf", c[2], kSec[1] + 62, ks); placeKnob ("duckRel", c[3], kSec[1] + 62, ks);
     placeKnob ("rwLow", c[0], kSec[1] + 140, ks); placeKnob ("rwMid", c[1], kSec[1] + 140, ks); placeKnob ("rwHigh", c[2], kSec[1] + 140, ks);
@@ -648,6 +651,15 @@ void Root::tick()
     learnB.recording = learning;
     if (learning) learnB.repaint();
     if (! learning && statusText.startsWith ("Learning")) { juce::String msg; proc.stopLearn (msg); statusText = msg; }
+    {   // MATCH LOUDNESS: lamp + seconds while measuring, then the held gain
+        const bool matching = proc.isLoudMatching();
+        const float lg = proc.apvts.getRawParameterValue ("loudGain")->load();
+        const auto t = matching ? "MEASURING " + juce::String (proc.loudSeconds(), 0) + " S - STOP"
+                                : (std::abs (lg) > 0.05f ? "LOUDNESS " + juce::String (lg >= 0 ? "+" : "") + juce::String (lg, 1) + " DB" : juce::String ("MATCH LOUDNESS"));
+        if (matchB.getButtonText() != t) matchB.setButtonText (t);
+        matchB.recording = matching; matchB.setToggleState (matching, juce::dontSendNotification);
+        if (matching) matchB.repaint();
+    }
     const auto pn = proc.hasPreset() ? proc.getPresetName() : juce::String ("Suno Lead 01");
     if (pill.name != pn) { pill.name = pn; pill.repaint(); }
     if (statusText.isEmpty())
@@ -733,6 +745,19 @@ void Root::stepPreset (int dir)
     idx = idx < 0 ? (dir > 0 ? 0 : files.size() - 1) : (idx + dir + files.size()) % files.size();
     juce::String err;
     statusText = proc.loadPresetFile (files[idx], err) ? "Preset loaded: " + files[idx].getFileName() : err;
+}
+
+void Root::toggleLoudMatch()
+{
+    if (! proc.isLoudMatching())
+    {
+        proc.startLoudMatch();
+        statusText = "Measuring loudness... play the vocal (10 s or more, a loud part too), then press STOP.";
+    }
+    else
+    {
+        juce::String msg; proc.stopLoudMatch (msg); statusText = msg;
+    }
 }
 
 void Root::toggleLearn()

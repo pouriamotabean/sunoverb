@@ -55,6 +55,7 @@ struct Params
     float punch = 1.5f;             // unused since v1.7 (the onset shaper made z/ch/j jump); kept for old presets
     // v1.5 Advanced Dynamics (1 = as learned / preset): peak compressor amount, leveler strength, leveler speed
     float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f, attackScale = 1.0f;
+    float loudGainDb = 0.0f;        // v1.8 Match Loudness: held makeup (dB), set by the MATCH button
     float freezeHfDb = -18.0f, voicedShare = 0.55f, optoFastRelMs = 150.0f, optoSlowRelMs = 1200.0f, optoThrDb = -10.0f, optoRatioPer = 2.0f;   // v1.7 compressor tuning   // v1.7: attackScale (opto attack)
     float comp2Ratio = 3.0f, comp2AttackMs = 30.0f, comp2ReleaseMs = 300.0f;   // ratio = max ratio for the leveler
     float levelerFactor = 2.1f;     // calibration: nominal ratio needed per unit of spread excess (v1.5: 2.1 with Punch on)
@@ -410,10 +411,11 @@ struct DeEsser
     // the compressors pull vowels down more than the quieter sibilants; on a sibilant the S/Z Match also
     // applies the gain reduction the preceding vowel had, so the "s" keeps its Suno level over the vowel
     float vowelGainDb = 0, compLift = 0, liftTarget = 0, liftG = 1;
+    float vowelRefDb = -200.0f, detRelLo = -14.0f;   // v1.8: high band relative to the last vowel (catches voiced z / j)
 
     void prepare (double fs)
     {
-        sfs = fs; vowelGainDb = 0; compLift = liftTarget = 0; liftG = 1; hp1.reset(); hp2.reset(); hp1.setHPF (fs, 4000.0); hp2.setHPF (fs, 4000.0);
+        sfs = fs; vowelGainDb = 0; vowelRefDb = -200.0f; compLift = liftTarget = 0; liftG = 1; hp1.reset(); hp2.reset(); hp1.setHPF (fs, 4000.0); hp2.setHPF (fs, 4000.0);
         for (auto& u : f) { u.reset(); u.setIdentity(); }
         envCoef = msToCoef (5.0f, fs); atk = msToCoef (1.5f, fs); rel = msToCoef (30.0f, fs);
         k = kTarget = 0; kApplied = -1;
@@ -441,7 +443,14 @@ struct DeEsser
         if ((++counter & 15) != 0) return;
         const float shareDb = 10 * std::log10 ((ePreHf + 1e-14f) / (ePreFull + 1e-12f));
         const bool voiced = 10 * std::log10 (ePreFull + 1e-12f) > -60.0f;
-        const float w = voiced ? std::clamp ((shareDb - detLo) / detSpan, 0.0f, 1.0f) : 0.0f;
+        const float fullDb = 10 * std::log10 (ePreFull + 1e-12f), hfDb = 10 * std::log10 (ePreHf + 1e-14f);
+        const float wShare = voiced ? std::clamp ((shareDb - detLo) / detSpan, 0.0f, 1.0f) : 0.0f;
+        // a voiced "z" / "j" carries its vowel-like buzz, so its high-band SHARE stays low even when its hiss is
+        // as loud as an "s": also look at the hiss level against the vowel before it (vowels stay below ~-16 dB)
+        const float wRel = (voiced && shareDb > detLo - 4.0f && vowelRefDb > -150.0f)
+                               ? std::clamp ((hfDb - vowelRefDb - detRelLo) / detSpan, 0.0f, 1.0f) : 0.0f;
+        const float w = std::max (wShare, wRel);
+        if (voiced && shareDb < detLo - 6.0f) vowelRefDb = vowelRefDb < -150.0f ? fullDb : 0.99f * vowelRefDb + 0.01f * fullDb;
         kTarget = w * amount;
         if (voiced && w <= 0.0f) { const float c = 0.97f; vowelGainDb = c * vowelGainDb + (1 - c) * compGainDb; }   // ~25 ms
         liftTarget = std::clamp (compGainDb - vowelGainDb, 0.0f, 12.0f) * kTarget;
@@ -934,6 +943,106 @@ struct VocalComp
 };
 
 //==============================================================================
+// Sibilant ceiling (v1.8). S/Z Match treats all your sibilants with one learned curve, but single ones can
+// still come out hotter, e.g. a voiced "z" whose hiss sits where the vowel EQ lifts a lot. This measures,
+// per sibilant, how much the whole chain raised its hiss (> 2 kHz) relative to the vowel before it, compared
+// with the singer's own relation (raw input, same time base), and pulls the hiss of just that sibilant back
+// down to the typical lift of your other sibilants (+1 dB). Never boosts; vowels are never touched.
+struct SibCeiling
+{
+    Biquad hpPre1, hpPre2, hpPost1, hpPost2, hpL1, hpL2;   // detectors (mono) + the split for the cut (stereo)
+    float ePreH = 0, ePreF = 0, ePostH = 0, ePostF = 0, vPre = -200, vPost = -200, typ = 0, envC = 0, vC = 0, typC = 0;
+    float g = 1, gTarget = 1, atk = 0, rel = 0, margin = 1.0f, cutDb = 0, liftS = 0; bool typInit = false; int count = 0;
+    std::vector<float>* dbg = nullptr; long n = 0;   // offline analysis only
+    void prepare (double fs)
+    {
+        for (auto* b : { &hpPre1, &hpPre2, &hpPost1, &hpPost2, &hpL1, &hpL2 }) { b->reset(); b->setHPF (fs, 2000.0); }
+        ePreH = ePreF = ePostH = ePostF = 0; vPre = vPost = -200; typ = 0; n = 0; typInit = false; g = gTarget = 1; cutDb = 0;
+        envC = msToCoef (5.0f, fs); vC = msToCoef (60.0f, fs); typC = msToCoef (3000.0f, fs);
+        atk = msToCoef (2.0f, fs); rel = msToCoef (30.0f, fs);
+    }
+    // rawMono: the input (before the EQ) at the output time; l/r: after S/Z Match; sib: S/Z detector weight 0..1
+    inline void process (float rawMono, float& l, float& r, float sib, bool vowel, float amount)
+    {
+        ++n; const float m = 0.5f * (l + r);
+        const float a = hpPre2.process (hpPre1.process (rawMono, 0), 0), b = hpPost2.process (hpPost1.process (m, 0), 0);
+        ePreH = envC * ePreH + (1 - envC) * a * a;   ePreF = envC * ePreF + (1 - envC) * rawMono * rawMono;
+        ePostH = envC * ePostH + (1 - envC) * b * b; ePostF = envC * ePostF + (1 - envC) * m * m;
+        if ((++count & 7) == 0)
+        {
+            if (vowel)
+            {
+                const float fp = 10 * std::log10 (ePreF + 1e-12f), fo = 10 * std::log10 (ePostF + 1e-12f);
+                vPre = vPre < -150 ? fp : vC * vPre + (1 - vC) * fp; vPost = vPost < -150 ? fo : vC * vPost + (1 - vC) * fo;
+            }
+            gTarget = 1.0f;
+            if (sib <= 0.5f) typInit = false;   // a new sibilant starts its own smoothing
+            if (sib > 0.5f && vPre > -150)
+            {
+                const float lift = (10 * std::log10 (ePostH + 1e-14f) - vPost) - (10 * std::log10 (ePreH + 1e-14f) - vPre);
+                liftS = typInit ? 0.98f * liftS + 0.02f * lift : lift;   // ~8 ms: onset / tail spikes do not count
+                typInit = true;
+                typ += lift > typ ? 0.01f : -0.01f;                       // running MEDIAN of your sibilants' lift
+                const float over = std::clamp (liftS - typ - margin, 0.0f, 9.0f) * sib * amount;
+                gTarget = dbToGain (-over);
+            }
+            if (dbg) { dbg->push_back ((float) n); dbg->push_back ((10 * std::log10 (ePostH + 1e-14f) - vPost) - (10 * std::log10 (ePreH + 1e-14f) - vPre)); dbg->push_back (vowel ? 1.0f : 0.0f); dbg->push_back (sib); }
+        }
+        g = gTarget < g ? atk * g + (1 - atk) * gTarget : rel * g + (1 - rel) * gTarget;
+        cutDb = -gainToDb (g);
+        if (g < 0.999f)
+        {
+            const float hl = hpL2.process (hpL1.process (l, 0), 0), hr = hpL2.process (hpL1.process (r, 1), 1);
+            l -= (1 - g) * hl; r -= (1 - g) * hr;
+        }
+        else { hpL2.process (hpL1.process (l, 0), 0); hpL2.process (hpL1.process (r, 1), 1); }
+    }
+};
+
+//==============================================================================
+// Loudness meter (v1.8, Match Loudness): ITU-R BS.1770 integrated loudness of the plugin's output
+// (K-weighting, 400 ms blocks with 75 % overlap, -70 LUFS absolute and -10 LU relative gates).
+// The audio thread stores 100 ms mean squares while active; the message thread integrates them.
+struct LoudnessMeter
+{
+    Biquad shelf, hp; std::vector<float> sub; double acc = 0; int count = 0, subLen = 4800;
+    std::atomic<bool> active { false }; std::atomic<int> nSub { 0 };
+    void prepare (double fs, double maxSeconds = 300.0)
+    {
+        shelf.reset(); hp.reset(); shelf.setHighShelf (fs, 1681.97, 4.0, 0.7072); hp.setHPF (fs, 38.135, 0.5003);
+        subLen = std::max (1, (int) std::round (0.1 * fs)); sub.assign ((size_t) (maxSeconds * 10), 0.0f); acc = 0; count = 0;
+    }
+    void start() { acc = 0; count = 0; nSub = 0; active = true; }
+    void stop() { active = false; }
+    inline void push (float l, float r)
+    {
+        if (! active.load (std::memory_order_relaxed)) return;
+        const float a = hp.process (shelf.process (l, 0), 0), b = hp.process (shelf.process (r, 1), 1);
+        acc += (double) a * a + (double) b * b;
+        if (++count >= subLen)
+        {
+            const int k = nSub.load();
+            if (k < (int) sub.size()) { sub[(size_t) k] = (float) (acc / count); nSub = k + 1; }
+            acc = 0; count = 0;
+        }
+    }
+    double seconds() const { return nSub.load() * 0.1; }
+    // integrated loudness in LUFS, or -100 if there is not enough above the gates
+    float integrated() const
+    {
+        const int n = nSub.load(); std::vector<double> blk;
+        for (int i = 0; i + 4 <= n; ++i) blk.push_back (0.25 * (sub[(size_t) i] + sub[(size_t) i + 1] + sub[(size_t) i + 2] + sub[(size_t) i + 3]));
+        auto lufs = [] (double z) { return -0.691 + 10 * std::log10 (z + 1e-20); };
+        double s = 0; int c = 0;
+        for (double z : blk) if (lufs (z) > -70) { s += z; ++c; }
+        if (c < 5) return -100.0f;
+        const double rel = lufs (s / c) - 10; s = 0; c = 0;
+        for (double z : blk) if (lufs (z) > -70 && lufs (z) > rel) { s += z; ++c; }
+        return c > 0 ? (float) lufs (s / c) : -100.0f;
+    }
+};
+
+//==============================================================================
 // Width meter: side-minus-mid per band (low 100-300 Hz, mid 400-3000 Hz, high 5-12 kHz), separately while
 // singing and in the pauses. It classifies time exactly like the preset analyzer (singing = mid 12 dB above
 // side and within 30 dB of the loud parts; pause = 60-400 ms after a phrase of >= 400 ms, if the pause lasts
@@ -1071,12 +1180,15 @@ public:
     int freezeHold = 0, freezeHoldLen = 0;
     Biquad voiceLp1, voiceLp2, voiceHp1, voiceHp2; float vAll = 0, vLow = 0, vHigh = 0, vCoef = 0;   // voicing gate (v1.7)
     DeEsser deess;
+    SibCeiling sibCeil; DelayLine laRaw;
     StereoDelay delay;
     FDNReverb rev;
     MicroWidth widthLayer;
     SideBands revSB, layerSB, delaySB;
     Learner learner;
     WidthMeter widthMeter;   // output width per band (WIDTH graph)
+    LoudnessMeter loud;      // Match Loudness: output before the Output knob and the loudness gain
+    float restoreGain = 1;
     Biquad wetHp, wetLp, wetBump;
     DelayLine laL, laR;                       // lookahead for the compressors
     int lookahead = 0;
@@ -1100,18 +1212,19 @@ public:
     {
         fs = sampleRate;
         lookahead = (int) std::round (0.005 * fs);
-        laL.allocate (lookahead + 4); laR.allocate (lookahead + 4);
+        laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs);
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
         voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
         revSB.prepare (fs); layerSB.prepare (fs); delaySB.prepare (fs);
         widthMeter.prepare (fs, 8.0);
+        loud.prepare (fs);
         for (auto& m : mWidthBands) m = -100.0f;
         wetHp.reset(); wetLp.reset(); wetBump.reset();
         setParams (p);
     }
     int getLatency() const { return lookahead; }
-    void reset() { rev.clear(); delay.l.clear(); delay.r.clear(); laL.clear(); laR.clear(); c1.reset(); c2.reset(); duckGr = duckEnv = 0; }
+    void reset() { rev.clear(); delay.l.clear(); delay.r.clear(); laL.clear(); laR.clear(); laRaw.clear(); c1.reset(); c2.reset(); duckGr = duckEnv = 0; }
 
     void setParams (const Params& np)
     {
@@ -1120,7 +1233,8 @@ public:
         // gain staging: bring singing level to -18 dBFS internally, restore afterwards
         float stage = (p.autoGainStage && p.hasSourceLevel) ? std::clamp (-18.0f - p.sourceLevelDb, -24.0f, 30.0f) : 0.0f;
         inGain = dbToGain (stage);
-        outGain = dbToGain (-stage + p.outputDb);
+        restoreGain = dbToGain (-stage);
+        outGain = dbToGain (-stage + p.outputDb + p.loudGainDb);   // v1.8: + Match Loudness gain (held)
         auto corr = computeCorrection (p);
         if (corr != lastCorrection || ! eqValid) { eq.setGains (MatchEQ::solve (corr, fs)); lastCorrection = corr; eqValid = true; }
 
@@ -1263,7 +1377,7 @@ public:
             const float e = 0.5f * (l * l + r * r);
             holdEnv = holdCoef * holdEnv + (1 - holdCoef) * e;
             const bool pause = 10 * std::log10 (holdEnv + 1e-12f) < holdDb;
-            laL.push (l); laR.push (r);
+            laL.push (l); laR.push (r); laRaw.push (0.5f * (preL + preR));
             const float laOutL = laL.read (lookahead - 1), laOutR = laR.read (lookahead - 1);
             deess.detect (preL, preR, 0.0f);
             // consonant flag (5 ms early) held 30 ms: the compressors freeze over s/z/sh/ch/j
@@ -1284,7 +1398,8 @@ public:
             maxGr1 = std::max (maxGr1, vc.grDb()); maxGr2 = std::max (maxGr2, c2.gr);
             l = laOutL * g1 * g2; r = laOutR * g1 * g2;
             deess.apply (l, r);
-            maxDs = std::max (maxDs, deess.currentCut());
+            sibCeil.process (laRaw.read (lookahead - 1), l, r, deess.k, ! consonant && ! pause, std::clamp (p.deessAmount, 0.0f, 2.0f));
+            maxDs = std::max (maxDs, deess.currentCut() + sibCeil.cutDb);
             if (satMix > 0)
             {
                 float sl = std::tanh (l * satDrive) / satDrive, sr = std::tanh (r * satDrive) / satDrive;
@@ -1326,6 +1441,7 @@ public:
             float dg = dbToGain (-duckGr);
             l += wl * dg + ws; r += wr * dg - ws;
             widthMeter.push (l, r);   // before the output gain: ratios only
+            loud.push (l * restoreGain, r * restoreGain);
             L[i] = l * outGain;
             if (R) R[i] = r * outGain;
             learner.push (rawMono, 0.5f * (l + r));
