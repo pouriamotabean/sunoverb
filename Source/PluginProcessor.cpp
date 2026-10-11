@@ -177,14 +177,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     band ("dwMid",  "Echo Width Mid",    -30, 12, 0.0f);
     band ("dwHigh", "Echo Width High",   -30, 12, 0.0f);
     // v1.5: Advanced Dynamics, relative to what Learn / the preset set (100 % = as learned)
-    for (auto [id, name] : std::vector<std::pair<const char*, const char*>> { { "dynPeak", "Peak Comp" }, { "dynLeveler", "Leveler" },
+    for (auto [id, name] : std::vector<std::pair<const char*, const char*>> { { "dynPeak", "Peak Comp" }, { "dynLeveler", "Rider" },
                                                                                { "dynSpeed", "Comp Speed" }, { "dynPunch", "Attack" } })   // v1.7: dynPunch = opto attack (ID kept for saved sessions)
         p.push_back (std::make_unique<APF> (juce::ParameterID { id, 4 }, name, NRange (0, 200), 100.0f, pct));
     // v1.8: Match Loudness gain (set by the MATCH LOUDNESS button, then held; adjustable)
     p.push_back (std::make_unique<APF> (juce::ParameterID { "loudGain", 5 }, "Loudness Match", NRange (-24, 24), 0.0f, dB));
     // v1.11: harmonic exciter (replaces the tanh saturation): amount (100 % = fitted to Suno) and air tilt
     p.push_back (std::make_unique<APF> (juce::ParameterID { "harm", 6 }, "Harmonics", NRange (0, 200), 100.0f, pct));
-    p.push_back (std::make_unique<APF> (juce::ParameterID { "air", 6 }, "Air", NRange (-12, 12), 0.0f, dB));
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "air", 6 }, "Air", NRange (-12, 12), 5.0f, dB));   // v1.13 default +5 by ear
     return { p.begin(), p.end() };
 }
 
@@ -258,6 +258,8 @@ sc::Params SunoChainProcessor::buildParams() const
     p.layerBandDb = { v ("lwLow"), v ("lwMid"), v ("lwHigh") };
     p.delayBandDb = { v ("dwLow"), v ("dwMid"), v ("dwHigh") };
     p.peakScale = v ("dynPeak") / 100.0f; p.levelerScale = v ("dynLeveler") / 100.0f;
+    // v1.13: the "dynLeveler" knob is the vocal RIDER: 100 % = +/-2 dB, 200 % = +/-4 dB, 0 = off (the old leveler is gone)
+    p.rideRangeDb = 2.0f * v ("dynLeveler") / 100.0f; p.rideOn = p.rideRangeDb > 0.05f;
     p.speedScale = juce::jmax (0.25f, v ("dynSpeed") / 100.0f);
     p.punch = 0.0f;                                            // v1.7: onset shaper removed
     p.attackScale = juce::jmax (0.25f, v ("dynPunch") / 100.0f);   // 100 % = 10 ms
@@ -375,7 +377,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
     }
     set ("dynPeak", num (json, "user.dyn_peak", 100.0)); set ("dynLeveler", num (json, "user.dyn_leveler", 100.0));
     set ("dynSpeed", num (json, "user.dyn_speed", 100.0)); set ("dynPunch", num (json, "user.dyn_punch", 100.0));
-        set ("harm", num (json, "user.harmonics", 100.0)); set ("air", num (json, "user.air_db", 0.0));
+        set ("harm", num (json, "user.harmonics", 100.0)); set ("air", num (json, "user.air_db", 5.0));
     dirty = true;
     return true;
 }

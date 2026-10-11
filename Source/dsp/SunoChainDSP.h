@@ -57,11 +57,14 @@ struct Params
     float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f, attackScale = 1.0f;
     bool sibCeiling = false, deessRelDetect = false;   // v1.8 experiments, OFF since v1.9 (they ate s/sh/ch in the plugin)
     float excAmount = 1.0f, excAdb = 6.0f, excBdb = 8.0f, airDb = 0.0f;   // excAmount = SATURATION (v1.12: crisp depth)
-    float crispDepth = 1.0f;        // v1.12: scale of the crisp at SATURATION 100 %
+    float crispDepth = 1.3f;        // v1.13: SATURATION 100 % = the 130 % of v1.12 (Pouria's sweet spot)
     bool useExciter = false;        // v1.11 exciter, off since v1.12   // v1.11 harmonic exciter (amount 1 = fitted to Suno)
+    bool rideOn = true; float rideRangeDb = 2.0f, rideAmount = 0.25f, rideSpeedMs = 300.0f;   // v1.13 vocal rider (replaces the leveler)
+    float lookaheadMs = 20.0f;      // v1.13: 20 ms so the rider is never late (reported to the host as latency)
+    float onsetNarrowDb = 12.0f, onsetNarrowMs = 20.0f;   // v1.13.1: Suno.s highs start each note narrower (phase-correct now)
     int listenMode = 0;             // v1.10 LISTEN: 0 all, 1 wet only (reverb + echo, ducked), 2 width layer only; never saved
     float loudGainDb = 0.0f;        // v1.8 Match Loudness: held makeup (dB), set by the MATCH button
-    float freezeHfDb = -18.0f, voicedShare = 0.55f, optoFastRelMs = 150.0f, optoSlowRelMs = 1200.0f, optoThrDb = -10.0f, optoRatioPer = 2.0f;   // v1.7 compressor tuning   // v1.7: attackScale (opto attack)
+    float freezeHfDb = -18.0f, voicedShare = 0.55f, optoFastRelMs = 150.0f, optoSlowRelMs = 1200.0f, optoThrDb = -6.0f, optoRatioPer = 2.0f;   // v1.7 compressor tuning   // v1.7: attackScale (opto attack)
     float comp2Ratio = 3.0f, comp2AttackMs = 30.0f, comp2ReleaseMs = 300.0f;   // ratio = max ratio for the leveler
     float levelerFactor = 2.1f;     // calibration: nominal ratio needed per unit of spread excess (v1.5: 2.1 with Punch on)
     float compAmount = 1.0f;
@@ -107,7 +110,7 @@ struct Params
     float predelayMs = 180.0f, rt60 = 3.0f, rt60LowMul = 1.0f, rt60HighMul = 0.75f, crossoverHz = 1500.0f;
     float size = 1.0f, modDepth = 0.5f, diffusion = 0.75f, diffusionSize = 2.0f;
     float earlyMs = 22.0f, earlyLevelDb = -100.0f;   // discrete early taps off: Suno's reverb has no slap
-    float wetHpf = 300.0f, wetLpf = 5000.0f, wetBumpHz = 2500.0f, wetBumpDb = 2.0f;
+    float wetHpf = 300.0f, wetLpf = 5000.0f, wetBumpHz = 2500.0f, wetBumpDb = 2.0f, wetMudDb = -5.0f, wetAirDb = 10.0f;   // v1.13 tail tone fitted to Suno (was ~3 dB muddy, 5-7 dB dark)
     float width = 1.0f;
     float reverbLevelDb = -10.0f;   // un-ducked wet level relative to the dry vocal (stationary signal)
 
@@ -622,7 +625,7 @@ struct MicroWidth
 struct SideBands
 {
     Biquad lpA, lpB, hpA, hpB, lp2A, lp2B, hp2A, hp2B, ap; double fs = 48000;
-    std::array<float, 3> g { 1, 1, 1 }, gT { 1, 1, 1 }; float gc = 0;
+    std::array<float, 3> g { 1, 1, 1 }, gT { 1, 1, 1 }; float gc = 0, topMul = 1.0f;   // topMul: dynamic top-band gain (v1.13.1 onset envelope)
     void prepare (double s) { fs = s; for (auto* b : { &lpA, &lpB, &hpA, &hpB, &lp2A, &lp2B, &hp2A, &hp2B, &ap }) b->reset(); gc = msToCoef (20.0f, fs); }
     void set (float fLow, float fHigh, const std::array<float, 3>& db, float scale = 1.0f)
     {
@@ -639,7 +642,7 @@ struct SideBands
         float hi = hpB.process (hpA.process (s, ch), ch);
         float mid = lp2B.process (lp2A.process (hi, ch), ch);
         float top = hp2B.process (hp2A.process (hi, ch), ch);
-        return g[0] * lo + g[1] * mid + g[2] * top;
+        return g[0] * lo + g[1] * mid + g[2] * top * topMul;
     }
 };
 
@@ -1281,8 +1284,11 @@ public:
     WidthMeter widthMeter;   // output width per band (WIDTH graph)
     LoudnessMeter loud;      // Match Loudness: output before the Output knob and the loudness gain
     float restoreGain = 1;
-    Biquad wetHp, wetLp, wetBump;
+    Biquad wetHp, wetLp, wetBump, wetMud, wetAir;   // wetAir: the FDN tail is ~5 dB darker than Suno above 4 kHz   // v1.13 wetMud: the reverb was ~3 dB too full at 250 Hz-1 kHz vs Suno
     DelayLine laL, laR;                       // lookahead for the compressors
+    DelayLine detL, detR; int detLag = 0;     // keeps the S/Z detector 5 ms ahead of the output whatever the lookahead
+    Biquad onHp1, onHp2; float onFast = 0, onSlow = 0, onFastC = 0, onSlowC = 0, onG = 1, onRecC = 0, onDip = 1;
+    float rideEnv = 0, rideEnvC = 0, rideRef = -200, rideRefC = 0, rideG = 0, rideGC = 0;
     int lookahead = 0;
     float duckEnv = 0, duckGr = 0, duckEnvCoef = 0, duckAtk = 0, duckRel = 0, phraseRef = -100, phraseDecay = 0;
     float freezeHf = 0.063f, rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
@@ -1303,7 +1309,12 @@ public:
     void prepare (double sampleRate)
     {
         fs = sampleRate;
-        lookahead = (int) std::round (0.005 * fs);
+        lookahead = (int) std::round (std::clamp (p.lookaheadMs, 5.0f, 50.0f) * 0.001 * fs);
+        detLag = std::max (0, lookahead - (int) std::round (0.005 * fs));
+        detL.allocate (detLag + 4); detR.allocate (detLag + 4);
+        onHp1.reset(); onHp2.reset(); onHp1.setHPF (fs, 4500.0); onHp2.setHPF (fs, 4500.0); onFast = onSlow = 0; onG = 1;
+        onFastC = msToCoef (3.0f, fs); onSlowC = msToCoef (60.0f, fs);
+        rideEnv = 0; rideRef = -200; rideG = 0; rideEnvC = msToCoef (50.0f, fs); rideRefC = msToCoef (4000.0f, fs);
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs);
         excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset();
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
@@ -1313,7 +1324,7 @@ public:
         widthMeter.prepare (fs, 8.0);
         loud.prepare (fs);
         for (auto& m : mWidthBands) m = -100.0f;
-        wetHp.reset(); wetLp.reset(); wetBump.reset();
+        wetHp.reset(); wetLp.reset(); wetBump.reset(); wetMud.reset(); wetAir.reset();
         setParams (p);
     }
     int getLatency() const { return lookahead; }
@@ -1357,7 +1368,10 @@ public:
         const float thr2 = -18.0f - spreadIn * 0.5f - 2.0f;     // RMS domain, just under the quiet phrases
         const float makeup2 = (-18.0f - thr2) * (1.0f - 1.0f / r2);
         const float spd = std::clamp (p.speedScale, 0.25f, 4.0f);   // >1 = faster
+        if (p.rideOn) r2 = 1.0f;   // v1.13: the rider does the slow levelling (gently); the leveler made the phrases too flat
         c2.set (fs, r2 > 1.01f ? thr2 : 50.0f, r2, 150.0f / spd, 1000.0f / spd, r2 > 1.01f ? makeup2 : 0.0f);
+        rideGC = msToCoef (std::max (50.0f, p.rideSpeedMs) / spd, fs);
+        onDip = dbToGain (-std::max (0.0f, p.onsetNarrowDb)); onRecC = msToCoef (std::max (5.0f, p.onsetNarrowMs), fs);
         rmsCoef = msToCoef (20.0f, fs);
         holdCoef = msToCoef (10.0f, fs);
         holdDb = -18.0f - 20.0f;                                  // below this the singer is pausing: freeze gains
@@ -1382,7 +1396,9 @@ public:
             const int f0 = SibilantAnalyzer::kFirstBand;
             const float makeupDb = gainToDb (eqMakeup);   // the EQ make-up lifts sibilants as well
             std::array<float, kNumBands> u {};
-            for (int b = f0; b < kNumBands; ++b) u[(size_t) b] = std::max (0.0f, corr[(size_t) b] + makeupDb);
+            Biquad airTmp; airTmp.setHighShelf (fs, 10000.0, p.airDb, 0.6);   // v1.13.1: the AIR shelf lifts sibilants too
+            for (int b = f0; b < kNumBands; ++b)
+                u[(size_t) b] = std::max (0.0f, corr[(size_t) b] + makeupDb + (float) airTmp.magDb (fs, bandCenters()[(size_t) b]));
             for (int b = f0; b < kNumBands; ++b)   // smooth shape, + up to 3 dB below raw
             {
                 float sm = u[(size_t) b] * 2, w = 2;
@@ -1400,7 +1416,7 @@ public:
                 // v1.7: per band, take back only what your "s" has above Suno's there (smoothed over neighbours,
                 // never more than the EQ lift + 3 dB): the 2-4 kHz body and the 10 kHz+ air each end up like Suno's.
                 auto sumDb = [&] (auto fn) { double e = 0; for (int b = f0; b < kNumBands; ++b) e += std::pow (10.0, fn (b) / 10.0); return 10 * std::log10 (e + 1e-30); };
-                auto post0 = [&] (int b) { return (double) (p.sibSource[(size_t) (b - f0)] + corr[(size_t) b] + makeupDb); };
+                auto post0 = [&] (int b) { return (double) (p.sibSource[(size_t) (b - f0)] + corr[(size_t) b] + makeupDb + airTmp.magDb (fs, bandCenters()[(size_t) b])); };
                 std::array<float, kNumBands> ex {};
                 for (int b = f0; b < kNumBands; ++b) ex[(size_t) b] = (float) (post0 (b) - p.sibTarget[(size_t) (b - f0)]);
                 const float amt = std::clamp (p.deessAmount, 0.0f, 2.0f);
@@ -1412,7 +1428,7 @@ public:
                     if (b < kNumBands - 1) { sm += ex[(size_t) b + 1]; w += 1; }
                     // v1.9 safety: never more than the EQ lift itself (the old +3 dB below your raw "s" is gone):
                     // a sibilant can end up as bright as Suno's, but never darker than you sang it
-                    d[(size_t) b] = std::clamp (amt * sm / w, 0.0f, std::max (0.0f, u[(size_t) b]));
+                    d[(size_t) b] = std::clamp (amt * sm / w, 0.0f, std::max (0.0f, u[(size_t) b]));   // v1.13.1: the "+12 %" is now the AIR-aware take-back (~1 dB more than v1.12 heard)
                 }
                 const double lPost = sumDb (post0), lTarget = sumDb ([&] (int b) { return (double) p.sibTarget[(size_t) (b - f0)]; });
                 const double lAfter = sumDb ([&] (int b) { return post0 (b) - d[(size_t) b]; });
@@ -1443,6 +1459,8 @@ public:
         predelaySamp = (float) (p.predelayMs * 0.001 * fs);
         wetHp.setHPF (fs, std::max (20.0f, p.wetHpf), 0.9);
         wetLp.setLPF (fs, std::min ((float) (fs * 0.45), p.wetLpf), 0.8);
+        wetMud.setPeak (fs, 500.0, 0.7, p.wetMudDb);
+        wetAir.setHighShelf (fs, 5000.0, p.wetAirDb, 0.7);
         wetBump.setPeak (fs, p.wetBumpHz, 1.0, p.wetBumpDb);
         wetGain = (p.reverbOn && amt > 0) ? dbToGain (p.reverbLevelDb) * amt : 0.0f;
         widthLayer.set (p, amt);
@@ -1477,11 +1495,14 @@ public:
             const bool pause = 10 * std::log10 (holdEnv + 1e-12f) < holdDb;
             laL.push (l); laR.push (r); laRaw.push (0.5f * (preL + preR));
             const float laOutL = laL.read (lookahead - 1), laOutR = laR.read (lookahead - 1);
-            deess.detect (preL, preR, 0.0f);
+            detL.push (preL); detR.push (preR);
+            deess.detect (detLag > 0 ? detL.read (detLag - 1) : preL, detLag > 0 ? detR.read (detLag - 1) : preR, 0.0f);
             // consonant flag (5 ms early) held 30 ms: the compressors freeze over s/z/sh/ch/j
             // voicing: share of energy below 1.5 kHz (vowels ~90 %, s/sh/ch/t/k/breath far below)
             {
-                const float m0 = 0.5f * (l + r), lo = voiceLp2.process (voiceLp1.process (m0, 0), 0);
+                // v1.13.1: on the signal BEFORE the Match EQ. After the EQ's high lift, 34 % of vowels looked like
+                // consonants and froze the compressor / rider / crisp for ~40 % of the singing.
+                const float m0 = 0.5f * (preL + preR), lo = voiceLp2.process (voiceLp1.process (m0, 0), 0);
                 const float hi = voiceHp2.process (voiceHp1.process (m0, 0), 0);
                 vAll = vCoef * vAll + (1 - vCoef) * m0 * m0; vLow = vCoef * vLow + (1 - vCoef) * lo * lo; vHigh = vCoef * vHigh + (1 - vCoef) * hi * hi;
             }
@@ -1489,12 +1510,32 @@ public:
             const bool unvoiced = vLow < p.voicedShare * vAll || vHigh > freezeHf * vAll;
             if (unvoiced || deess.kTarget > 0.15f) freezeHold = freezeHoldLen + lookahead; else if (freezeHold > 0) --freezeHold;
             const bool consonant = freezeHold > 0;
-            const float compMono = 0.5f * (laOutL + laOutR);
+            // v1.13 vocal rider: rides the level of words/phrases toward your typical singing level by at most
+            // +/-RANGE, slowly (~300 ms), measured 20 ms ahead so it is never late; held in pauses and on consonants
+            float rideGain = 1.0f;
+            if (p.rideOn && p.rideRangeDb > 0.01f)
+            {
+                const float m0 = 0.5f * (l + r);
+                rideEnv = rideEnvC * rideEnv + (1 - rideEnvC) * m0 * m0;
+                const float eDb = 10 * std::log10 (rideEnv + 1e-12f);
+                if (! pause && ! consonant)
+                {
+                    if (eDb > -70.0f && (rideRef < -150 || eDb > rideRef - 25.0f)) rideRef = rideRef < -150 ? eDb : rideRefC * rideRef + (1 - rideRefC) * eDb;
+                    if (rideRef > -150)
+                    {
+                        const float t = std::clamp ((rideRef - eDb) * p.rideAmount, -p.rideRangeDb, p.rideRangeDb);
+                        rideG = rideGC * rideG + (1 - rideGC) * t;
+                    }
+                }
+                rideGain = dbToGain (rideG);
+            }
+            else rideG = 0;
+            const float compMono = 0.5f * (laOutL + laOutR) * rideGain;
             const float g1 = vc.process (compMono, consonant || pause);
             rmsEnv = rmsCoef * rmsEnv + (1 - rmsCoef) * compMono * compMono * g1 * g1;
             const float g2 = c2.computeGain (std::sqrt (rmsEnv), consonant || pause);
-            maxGr1 = std::max (maxGr1, vc.grDb()); maxGr2 = std::max (maxGr2, c2.gr);
-            l = laOutL * g1 * g2; r = laOutR * g1 * g2;
+            maxGr1 = std::max (maxGr1, vc.grDb() + std::max (0.0f, -rideG)); maxGr2 = std::max (maxGr2, c2.gr);   // GR meter shows the rider's cuts too
+            l = laOutL * rideGain * g1 * g2; r = laOutR * rideGain * g1 * g2;
             deess.apply (l, r);
             if (p.sibCeiling) sibCeil.process (laRaw.read (lookahead - 1), l, r, deess.k, ! consonant && ! pause, std::clamp (p.deessAmount, 0.0f, 2.0f));
             else sibCeil.cutDb = 0;
@@ -1518,6 +1559,13 @@ public:
             float mono = 0.5f * (l + r);
             // width layer: side only, follows the dry vocal (not ducked)
             float ws = layerSB.process (widthLayer.process (mono));
+            {   // v1.13 note-onset envelope on the layer's highs: narrow at the start of each note, opening over ~60 ms
+                const float e2 = mono * mono;
+                onFast = onFastC * onFast + (1 - onFastC) * e2; onSlow = onSlowC * onSlow + (1 - onSlowC) * e2;
+                if (onFast > 2.0f * onSlow && onFast > 1e-6f) onG = onDip;   // level rising >3 dB faster than the 60 ms average = a new note
+                else onG = onRecC * onG + (1 - onRecC) * 1.0f;
+                layerSB.topMul = onG;   // applied inside the layer's own band split (phase-correct; v1.13 subtracted a HPF copy, which added energy)
+            }
             wE += ws * ws; dE += mono * mono;
             // wet bus: delay (also feeding the reverb) + reverb
             float wl = 0, wr = 0, dl = 0, dr = 0;
@@ -1530,8 +1578,8 @@ public:
             if (wetGain > 0)
             {
                 float rl, rr; rev.process (mono + 0.5f * (dl + dr) * delaySend, predelaySamp, rl, rr);
-                rl = wetBump.process (wetLp.process (wetHp.process (rl, 0), 0), 0);
-                rr = wetBump.process (wetLp.process (wetHp.process (rr, 1), 1), 1);
+                rl = wetAir.process (wetMud.process (wetBump.process (wetLp.process (wetHp.process (rl, 0), 0), 0), 0), 0);
+                rr = wetAir.process (wetMud.process (wetBump.process (wetLp.process (wetHp.process (rr, 1), 1), 1), 1), 1);
                 float m = 0.5f * (rl + rr), s = revSB.process (0.5f * (rl - rr) * p.width);
                 wl += (m + s) * wetGain; wr += (m - s) * wetGain;
             }

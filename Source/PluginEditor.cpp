@@ -472,7 +472,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     struct D { const char* id; const char* name; bool violet; };
     for (const auto& d : std::vector<D> {
             { "eqLow", "Low Boost", false }, { "air", "Air", false }, { "loudGain", "Loudness", false }, { "output", "Output", false },
-            { "dynPeak", "Peak", false }, { "dynLeveler", "Leveler", false }, { "dynSpeed", "Speed", false }, { "dynPunch", "Attack", false },
+            { "dynPeak", "Peak", false }, { "dynLeveler", "Rider", false }, { "dynSpeed", "Speed", false }, { "dynPunch", "Attack", false },
             { "width", "Width", false }, { "wetHpf", "HPF", false }, { "wetLpf", "LPF", false }, { "duckRel", "Duck Rel", false },
             { "rwLow", "Low", false }, { "rwMid", "Mid", false }, { "rwHigh", "High", false },
             { "lwLow", "Low", true }, { "lwMid", "Mid", true }, { "lwHigh", "High", true },
@@ -600,7 +600,7 @@ void Root::paint (juce::Graphics& g)
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
         drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.12", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v1.13.1", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
     }
     // section titles
     drawCaps (g, "Tone", { 70, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
