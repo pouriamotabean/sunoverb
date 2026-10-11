@@ -41,7 +41,7 @@ struct Params
     std::array<float, kNumBands> chainEffect {};   // dB, from Learn (v1.5): what the rest of the chain does to the spectrum
     bool  hasChainEffect = false;
     bool  hasTarget = true, hasSource = false;
-    float eqAmount = 1.0f, eqMaxBoostDb = 12.0f, eqMaxCutDb = 24.0f, eqLowWeight = 0.35f;
+    float eqAmount = 1.0f, eqMaxBoostDb = 12.0f, eqMaxCutDb = 24.0f, eqLowWeight = 0.35f, eqAirMul = 1.0f;   // eqAirMul 0 = v1.11 behaviour
     float eqMaxBoostHighDb = 15.0f;   // v1.5: from 6 kHz up (air), where dark vocals need more than 12 dB to reach Suno
 
     // dynamics
@@ -56,7 +56,9 @@ struct Params
     // v1.5 Advanced Dynamics (1 = as learned / preset): peak compressor amount, leveler strength, leveler speed
     float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f, attackScale = 1.0f;
     bool sibCeiling = false, deessRelDetect = false;   // v1.8 experiments, OFF since v1.9 (they ate s/sh/ch in the plugin)
-    float excAmount = 1.0f, excAdb = 6.0f, excBdb = 8.0f, airDb = 0.0f;   // v1.11 harmonic exciter (amount 1 = fitted to Suno)
+    float excAmount = 1.0f, excAdb = 6.0f, excBdb = 8.0f, airDb = 0.0f;   // excAmount = SATURATION (v1.12: crisp depth)
+    float crispDepth = 1.0f;        // v1.12: scale of the crisp at SATURATION 100 %
+    bool useExciter = false;        // v1.11 exciter, off since v1.12   // v1.11 harmonic exciter (amount 1 = fitted to Suno)
     int listenMode = 0;             // v1.10 LISTEN: 0 all, 1 wet only (reverb + echo, ducked), 2 width layer only; never saved
     float loudGainDb = 0.0f;        // v1.8 Match Loudness: held makeup (dB), set by the MATCH button
     float freezeHfDb = -18.0f, voicedShare = 0.55f, optoFastRelMs = 150.0f, optoSlowRelMs = 1200.0f, optoThrDb = -10.0f, optoRatioPer = 2.0f;   // v1.7 compressor tuning   // v1.7: attackScale (opto attack)
@@ -235,6 +237,9 @@ inline std::array<float, kNumBands> computeCorrection (const Params& p)
         //  120-300  : cuts in full, boosts scaled by "Low Match"
         float v = s / w * p.eqAmount * p.amount;
         const float fc = bandCenters()[i];
+        // v1.12 air: by ear the top needed MATCH EQ 150 % to sound like Suno (the S/Z Match and the closed loop
+        // eat part of the lift there). Boosts get x1.5 from 8 kHz up, ramping from 4 kHz.
+        if (v > 0 && fc > 4000.0f) v *= 1.0f + 0.5f * std::clamp ((float) std::log2 (fc / 4000.0f), 0.0f, 1.0f) * p.eqAirMul;
         if (fc < 120.0f)      v = std::min (v, 0.0f);
         else if (fc < 300.0f) v = v > 0.0f ? v * p.eqLowWeight : v;
         d[i] = std::clamp (v, -p.eqMaxCutDb, fc >= 6000.0f ? std::max (p.eqMaxBoostDb, p.eqMaxBoostHighDb) : p.eqMaxBoostDb);
@@ -1076,6 +1081,59 @@ struct ExciterBand
 };
 
 //==============================================================================
+// Crisp (v1.12, replaces the v1.11 exciter as SATURATION). OTT-style: the voice is split at 2.5 kHz and each
+// band is pulled toward its own typical level, quiet detail upward and peaks downward, so the top gets dense
+// and "crisp" without generating anything new. Level-normalised (the reference follows your singing), held in
+// pauses (no noise pumping up) and the upward part of the top band is off on s/z/sh/ch.
+struct CrispBand
+{
+    float env = 0, aE = 0, rE = 0, ref = -200, refC = 0, g = 0, aG = 0, rG = 0;
+    float upAmt = 0.5f, upRange = 10.0f, dnAmt = 0.5f, dnKnee = 2.0f;
+    void prepare (double fs) { env = 0; ref = -200; g = 0; aE = msToCoef (5.0f, fs); rE = msToCoef (80.0f, fs); refC = msToCoef (1000.0f, fs); aG = msToCoef (3.0f, fs); rG = msToCoef (60.0f, fs); }
+    // returns the band gain in dB for this sample
+    inline float gainDb (float m, float depth, bool hold, float upScale)
+    {
+        const float e2 = m * m; env = e2 > env ? aE * env + (1 - aE) * e2 : rE * env + (1 - rE) * e2;
+        const float e = 10 * std::log10 (env + 1e-12f);
+        if (! hold && e > -80.0f && (ref < -150 || e > ref - 30.0f)) ref = ref < -150 ? e : refC * ref + (1 - refC) * e;   // the band's typical singing level
+        float t = 0;
+        if (! hold && ref > -150)
+        {
+            const float below = ref - e;
+            if (below > 0) { const float fade = std::clamp ((30.0f - below) / 6.0f, 0.0f, 1.0f); t = std::min (below, upRange) * upAmt * upScale * fade; }
+            else if (-below > dnKnee) t = -(-below - dnKnee) * dnAmt;
+            t *= depth;
+        }
+        // hold (pause / consonant): back to unity within ~3 ms, so a consonant never inherits the vowel's lift
+        if (hold) g = aG * g;
+        else g = t > g ? aG * g + (1 - aG) * t : rG * g + (1 - rG) * t;
+        return g;
+    }
+};
+struct Crisp
+{
+    Biquad lp1, lp2, hp1, hp2; CrispBand lo, hi;
+    void prepare (double fs)
+    {
+        for (auto* b : { &lp1, &lp2, &hp1, &hp2 }) { b->reset(); }
+        lp1.setLPF (fs, 2500.0); lp2.setLPF (fs, 2500.0); hp1.setHPF (fs, 2500.0); hp2.setHPF (fs, 2500.0);
+        lo.prepare (fs); hi.prepare (fs);
+        lo.upAmt = 0.3f; lo.upRange = 6.0f;  lo.dnAmt = 0.15f; lo.dnKnee = 4.0f;   // body: gentle density only
+        hi.upAmt = 0.6f; hi.upRange = 12.0f; hi.dnAmt = 0.3f;  hi.dnKnee = 4.0f;   // top: the crisp (detail up, peaks a little down)
+    }
+    inline void process (float& l, float& r, float depth, bool hold, float sib)
+    {
+        const float ll = lp2.process (lp1.process (l, 0), 0), lr = lp2.process (lp1.process (r, 1), 1);
+        const float hl = hp2.process (hp1.process (l, 0), 0), hr = hp2.process (hp1.process (r, 1), 1);
+        // fricatives the S/Z detector misses (a voiced "z" / "j"): the top band carries most of the energy
+        hold = hold || hi.env > 0.3f * lo.env;
+        const float gl = dbToGain (lo.gainDb (0.5f * (ll + lr), depth, hold, 1.0f));
+        const float gh = dbToGain (hi.gainDb (0.5f * (hl + hr), depth, hold, 1.0f - std::min (1.0f, 1.5f * sib)));
+        l = ll * gl + hl * gh; r = lr * gl + hr * gh;   // LR4: the two bands sum flat
+    }
+};
+
+//==============================================================================
 // Width meter: side-minus-mid per band (low 100-300 Hz, mid 400-3000 Hz, high 5-12 kHz), separately while
 // singing and in the pauses. It classifies time exactly like the preset analyzer (singing = mid 12 dB above
 // side and within 30 dB of the loud parts; pause = 60-400 ms after a phrase of >= 400 ms, if the pause lasts
@@ -1214,7 +1272,7 @@ public:
     Biquad voiceLp1, voiceLp2, voiceHp1, voiceHp2; float vAll = 0, vLow = 0, vHigh = 0, vCoef = 0;   // voicing gate (v1.7)
     DeEsser deess;
     SibCeiling sibCeil; DelayLine laRaw;
-    ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
+    Crisp crisp; Biquad airShelf; float airShelfDb = 0; ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
     StereoDelay delay;
     FDNReverb rev;
     MicroWidth widthLayer;
@@ -1247,7 +1305,7 @@ public:
         fs = sampleRate;
         lookahead = (int) std::round (0.005 * fs);
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs);
-        excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs);
+        excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset();
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
         voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
@@ -1373,6 +1431,7 @@ public:
         }
         deess.amount = 1.0f; deess.relDetect = p.deessRelDetect; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
         satDrive = dbToGain (p.satDriveDb); satMix = 0.0f;   // v1.11: the tanh saturation is replaced by the harmonic exciter
+        airShelf.setHighShelf (fs, 10000.0, p.airDb, 0.6); airShelfDb = p.airDb;
         excGainA = std::max (0.0f, p.excAmount) * amt * dbToGain (p.excAdb);
         excGainB = std::max (0.0f, p.excAmount) * amt * dbToGain (p.excBdb + p.airDb);
 
@@ -1440,7 +1499,10 @@ public:
             if (p.sibCeiling) sibCeil.process (laRaw.read (lookahead - 1), l, r, deess.k, ! consonant && ! pause, std::clamp (p.deessAmount, 0.0f, 2.0f));
             else sibCeil.cutDb = 0;
             maxDs = std::max (maxDs, deess.currentCut() + sibCeil.cutDb);
-            if (excGainA > 0 || excGainB > 0)
+            if (p.excAmount > 0.001f && p.amount > 0)
+                crisp.process (l, r, p.excAmount * p.crispDepth * std::clamp (p.amount, 0.0f, 1.0f), pause || consonant || deess.k > 0.1f, deess.k);   // consonants pass untouched
+            if (std::abs (airShelfDb) > 0.01f) { l = airShelf.process (l, 0); r = airShelf.process (r, 1); }
+            if (p.useExciter && (excGainA > 0 || excGainB > 0))
             {   // gate: off on consonants / breaths (S/Z detector weight and the unvoiced flag)
                 const float gt = 1.0f - std::min (1.0f, 1.5f * deess.k);   // S/Z detector (before the EQ): reliable on bright vowels too
                 excGate = excGateC * excGate + (1 - excGateC) * gt;

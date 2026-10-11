@@ -518,7 +518,36 @@ Knob& Root::addKnob (const juce::String& id, const juce::String& name, int size,
     k->label.setJustificationType (juce::Justification::centred);
     k->label.setFont (capsFont (size >= 60 ? (big ? 14.0f : 12.5f) : 10.5f));
     k->label.setColour (juce::Label::textColourId, col::text.withAlpha (0.82f));
-    k->label.setInterceptsMouseClicks (false, false);
+    // v1.12: click the text under a knob to type a value ("300", "-6", "12k"), Enter to set, Esc to cancel
+    k->label.setEditable (true, false, true);
+    k->label.setMouseCursor (juce::MouseCursor::IBeamCursor);
+    k->label.setColour (juce::Label::textWhenEditingColourId, col::amberHi);
+    k->label.setColour (juce::Label::backgroundWhenEditingColourId, juce::Colour (0xff141416));
+    k->label.setColour (juce::Label::outlineWhenEditingColourId, col::amber.withAlpha (0.6f));
+    {
+        auto* sl = &k->slider; auto* lb = &k->label;
+        k->label.onEditorShow = [sl, lb]
+        {
+            if (auto* ed = lb->getCurrentTextEditor())
+            {
+                auto t = sl->getTextFromValue (sl->getValue()).upToFirstOccurrenceOf (" ", false, false);
+                ed->setText (t, false); ed->selectAll(); ed->setJustification (juce::Justification::centred);
+            }
+        };
+        k->label.onTextChange = [sl, lb]
+        {
+            auto t = lb->getText().trim().toLowerCase().replace (",", ".");
+            const bool kilo = t.containsChar ('k');
+            const auto num = t.retainCharacters ("-+.0123456789");
+            if (num.isNotEmpty())
+            {
+                double v = num.getDoubleValue() * (kilo ? 1000.0 : 1.0);
+                if (sl->getMaximum() <= 24.0 && kilo) v /= 1000.0;   // "k" only means kHz on frequency knobs
+                sl->setValue (juce::jlimit (sl->getMinimum(), sl->getMaximum(), v), juce::sendNotificationSync);
+            }
+            lb->setText ({}, juce::dontSendNotification);   // tick() puts the name back
+        };
+    }
     addAndMakeVisible (k->slider); addAndMakeVisible (k->label);
     k->att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, k->slider);
     auto* prm = proc.apvts.getParameter (id);
@@ -571,7 +600,7 @@ void Root::paint (juce::Graphics& g)
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
         drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.11", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v1.12", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
     }
     // section titles
     drawCaps (g, "Tone", { 70, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
@@ -703,7 +732,8 @@ void Root::tick()
     // knob labels show the value while you touch them
     for (auto& [id, k] : knobs)
     {
-        const bool show = k->slider.isMouseButtonDown() || k->slider.isMouseOver();
+        if (k->label.isBeingEdited()) continue;
+        const bool show = k->slider.isMouseButtonDown() || k->slider.isMouseOver() || k->label.isMouseOver();
         const auto t = show ? k->slider.getTextFromValue (k->slider.getValue()) : k->name.toUpperCase();
         if ((bool) k->slider.getProperties().getWithDefault ("hov", false) != show)
         { k->slider.getProperties().set ("hov", show); k->slider.repaint(); }   // arc glows while touched
