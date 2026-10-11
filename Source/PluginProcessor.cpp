@@ -258,8 +258,15 @@ sc::Params SunoChainProcessor::buildParams() const
     p.layerBandDb = { v ("lwLow"), v ("lwMid"), v ("lwHigh") };
     p.delayBandDb = { v ("dwLow"), v ("dwMid"), v ("dwHigh") };
     p.peakScale = v ("dynPeak") / 100.0f; p.levelerScale = v ("dynLeveler") / 100.0f;
-    // v1.13: the "dynLeveler" knob is the vocal RIDER: 100 % = +/-2 dB, 200 % = +/-4 dB, 0 = off (the old leveler is gone)
-    p.rideRangeDb = 2.0f * v ("dynLeveler") / 100.0f; p.rideOn = p.rideRangeDb > 0.05f;
+    // v1.13: the "dynLeveler" knob is the vocal RIDER (the old leveler is gone), 0 = off
+    // v1.13.2: 0-100 % unchanged (Suno-fitted, gentle); above 100 % it really rides: 200 % = +/-6 dB, 80 % of the
+    // way to your typical level (like a vocal rider plug-in)
+    {
+        const float rv = v ("dynLeveler") / 100.0f, x = juce::jlimit (0.0f, 1.0f, rv - 1.0f);
+        p.rideRangeDb = rv <= 1.0f ? 2.0f * rv : 2.0f + 4.0f * x;
+        p.rideAmount = rv <= 1.0f ? 0.25f : 0.25f + 0.55f * x;
+        p.rideOn = p.rideRangeDb > 0.05f;
+    }
     p.speedScale = juce::jmax (0.25f, v ("dynSpeed") / 100.0f);
     p.punch = 0.0f;                                            // v1.7: onset shaper removed
     p.attackScale = juce::jmax (0.25f, v ("dynPunch") / 100.0f);   // 100 % = 10 ms
