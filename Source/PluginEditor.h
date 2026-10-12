@@ -12,6 +12,8 @@ constexpr int kW = 1200, kH = 800, kSideW = 480;   // Advanced = side module on 
 struct Images
 {
     juce::Image faceplate, sidePanel, knob, knobLarge, pillLong, pillShort, buttonUp, buttonDown, slot;
+    // v1.14 controls
+    juce::Image toggleUp, toggleDown, glassOff, glassOn, slideLeft, slideRight, flatUp, flatDown, lcd, selRing, selDisc, nameplate;
     static const Images& get();
 };
 
@@ -56,6 +58,65 @@ class PushLamp : public juce::ToggleButton
 {
 public:
     void paintButton (juce::Graphics&, bool over, bool down) override;
+};
+
+// v1.14: brushed flat metal button with engraved caps (LOAD / SAVE / LEARN / CLEAR); sinks in while pressed or on
+class FlatButton : public juce::Button
+{
+public:
+    explicit FlatButton (const juce::String& t) : juce::Button (t) {}
+    bool recording = false;
+    void paintButton (juce::Graphics&, bool over, bool down) override;
+};
+
+// v1.14: metal toggle switch (lever up = on) with a lamp and a caption (reverb SUNO / BLACK)
+class LeverSwitch : public juce::ToggleButton
+{
+public:
+    juce::String onText { "BLACK" }, offText { "SUNO" };
+    juce::Colour lampColour { 0xff6fb4ff };
+    void paintButton (juce::Graphics&, bool over, bool down) override;
+};
+
+// v1.14: square glass push button that lights up (MATCH LOUDNESS), caption to its right
+class GlassButton : public juce::Button
+{
+public:
+    explicit GlassButton (const juce::String& t) : juce::Button (t) {}
+    bool lit = false, blinking = false;
+    void paintButton (juce::Graphics&, bool over, bool down) override;
+};
+
+// v1.14: knurled slide switch (ADVANCED), caption to its left
+class SlideSwitch : public juce::Button
+{
+public:
+    explicit SlideSwitch (const juce::String& t) : juce::Button (t) { setClickingTogglesState (false); }
+    void paintButton (juce::Graphics&, bool over, bool down) override;
+};
+
+// v1.14: three-position rotary selector (LISTEN: ALL / WET / WIDTH); click or drag to turn
+class Selector : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<void (int)> onChange;
+    void setPosition (int p) { if (p != pos) { pos = p; repaint(); } }
+    int getPosition() const { return pos; }
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+private:
+    int pos = 0;
+};
+
+// v1.14: small calculator-style display for the status line; long messages scroll
+class Lcd : public juce::Component
+{
+public:
+    void setText (const juce::String& t) { if (t != text) { text = t; offset = 0; hold = 30; repaint(); } }
+    void tick();
+    void paint (juce::Graphics&) override;
+private:
+    juce::String text; float offset = 0; int hold = 0;
 };
 
 // preset name in the long glass pill, with < > to step through the preset folder
@@ -130,13 +191,18 @@ private:
     Display display;
     Meters meters;
     PresetPill pill;
-    TextLink loadB { "LOAD" }, saveB { "SAVE" }, learnB { "LEARN" }, clearB { "CLEAR" };
-    TextLink eqTab { "EQ", 11.0f }, widthTab { "WIDTH", 11.0f }, advancedB { "ADVANCED  +", 11.0f }, matchB { "MATCH LOUDNESS", 11.0f }, listenB { "LISTEN  ALL", 11.0f };
+    FlatButton loadB { "LOAD" }, saveB { "SAVE" }, learnB { "LEARN" }, clearB { "CLEAR" };
+    TextLink eqTab { "EQ", 11.0f }, widthTab { "WIDTH", 11.0f };
+    SlideSwitch advancedB { "ADVANCED" };
+    GlassButton matchB { "MATCH LOUDNESS" };
+    Selector listenSel;
+    LeverSwitch blackSw;
+    Lcd lcd;
     Lamp revLamp, widthLamp, echoLamp;
     PushLamp syncB;
     juce::ComboBox noteBox;
     juce::Label status, delayInfo;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> revAtt, widthAtt, echoAtt, syncAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> revAtt, widthAtt, echoAtt, syncAtt, blackAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> noteAtt;
     std::map<juce::String, std::unique_ptr<Knob>> knobs;
     std::vector<juce::String> drawerIds;

@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "gui/Assets.h"
+#include "gui/Assets2.h"
 
 namespace ui
 {
@@ -31,6 +32,18 @@ const Images& Images::get()
         i.buttonUp   = load (assets::button_up_png, assets::button_up_pngSize);
         i.buttonDown = load (assets::button_down_png, assets::button_down_pngSize);
         i.slot       = load (assets::slot_small_png, assets::slot_small_pngSize);
+        i.toggleUp   = load (assets2::toggle_up_png, assets2::toggle_up_pngSize);
+        i.toggleDown = load (assets2::toggle_down_png, assets2::toggle_down_pngSize);
+        i.glassOff   = load (assets2::glass_off_png, assets2::glass_off_pngSize);
+        i.glassOn    = load (assets2::glass_on_png, assets2::glass_on_pngSize);
+        i.slideLeft  = load (assets2::slide_left_png, assets2::slide_left_pngSize);
+        i.slideRight = load (assets2::slide_right_png, assets2::slide_right_pngSize);
+        i.flatUp     = load (assets2::flat_up_png, assets2::flat_up_pngSize);
+        i.flatDown   = load (assets2::flat_down_png, assets2::flat_down_pngSize);
+        i.lcd        = load (assets2::lcd_png, assets2::lcd_pngSize);
+        i.selRing    = load (assets2::selector_ring_png, assets2::selector_ring_pngSize);
+        i.selDisc    = load (assets2::selector_disc_png, assets2::selector_disc_pngSize);
+        i.nameplate  = load (assets2::nameplate_png, assets2::nameplate_pngSize);
         return i;
     }();
     return im;
@@ -225,6 +238,141 @@ void PushLamp::paintButton (juce::Graphics& g, bool over, bool down)
     g.drawImage (getToggleState() || down ? im.buttonDown : im.buttonUp, r.reduced (4), juce::RectanglePlacement::stretchToFit);
     lampDot (g, r.getCentre(), r.getWidth() * 0.07f, col::amber, getToggleState());
     if (over) { g.setColour (juce::Colours::white.withAlpha (0.04f)); g.fillEllipse (r.reduced (r.getWidth() * 0.14f)); }
+}
+
+//==============================================================================
+// v1.14 controls
+static void drawImageFit (juce::Graphics& g, const juce::Image& im, juce::Rectangle<float> r)
+{
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+    g.drawImage (im, r, juce::RectanglePlacement::centred);
+}
+
+void FlatButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    const auto& im = Images::get();
+    auto r = getLocalBounds().toFloat();
+    const bool in = down || getToggleState();
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+    g.drawImage (in ? im.flatDown : im.flatUp, r, juce::RectanglePlacement::stretchToFit);
+    auto t = r.translated (0, in ? 1.0f : 0.0f).reduced (6, 0);
+    // engraved: dark cut with a faint highlight under it, amber while on
+    drawCaps (g, getButtonText(), t.translated (0, 1.0f), juce::Colours::white.withAlpha (0.10f), 12.0f);
+    drawCaps (g, getButtonText(), t, getToggleState() ? col::amber : (over ? col::cream : col::text.withAlpha (0.78f)), 12.0f);
+    if (recording)
+    {
+        const bool lit = (juce::Time::getMillisecondCounter() / 450) % 2 == 0;
+        lampDot (g, { r.getX() + 11.0f, r.getCentreY() }, 3.2f, juce::Colour (0xffff5a3c), lit);
+    }
+}
+
+void LeverSwitch::paintButton (juce::Graphics& g, bool over, bool)
+{
+    const auto& im = Images::get();
+    auto r = getLocalBounds().toFloat();
+    const bool on = getToggleState();
+    auto sw = r.removeFromLeft (r.getHeight() * 0.8f);
+    drawImageFit (g, on ? im.toggleUp : im.toggleDown, sw);
+    auto lampC = juce::Point<float> (r.getX() + 9.0f, r.getCentreY());
+    lampDot (g, lampC, 3.4f, lampColour, on);
+    auto txt = r.withTrimmedLeft (18.0f);
+    drawCaps (g, on ? onText : offText, txt, on ? lampColour.brighter (0.3f) : (over ? col::cream : col::dim.brighter (0.15f)), 11.0f,
+              juce::Justification::centredLeft);
+}
+
+void GlassButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    const auto& im = Images::get();
+    auto r = getLocalBounds().toFloat();
+    auto sq = r.removeFromLeft (r.getHeight());
+    bool on = lit;
+    if (blinking) on = (juce::Time::getMillisecondCounter() / 450) % 2 == 0;
+    drawImageFit (g, on ? im.glassOn : im.glassOff, sq.reduced (down ? 1.5f : 0.5f));
+    drawCaps (g, getButtonText(), r.withTrimmedLeft (10.0f), lit ? col::amber : (over ? col::cream : col::text.withAlpha (0.85f)), 11.0f,
+              juce::Justification::centredLeft);
+}
+
+void SlideSwitch::paintButton (juce::Graphics& g, bool over, bool)
+{
+    const auto& im = Images::get();
+    auto r = getLocalBounds().toFloat();
+    auto sw = r.removeFromRight (r.getHeight() * 3.4f);
+    drawImageFit (g, getToggleState() ? im.slideRight : im.slideLeft, sw);
+    drawCaps (g, getButtonText(), r.withTrimmedRight (10.0f), getToggleState() ? col::amber : (over ? col::cream : col::text.withAlpha (0.85f)), 11.0f,
+              juce::Justification::centredRight);
+}
+
+void Selector::paint (juce::Graphics& g)
+{
+    const auto& im = Images::get();
+    auto r = getLocalBounds().toFloat();
+    auto dial = r.removeFromLeft (r.getHeight()).reduced (1.0f);
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+    g.drawImage (im.selRing, dial, juce::RectanglePlacement::stretchToFit);
+    // the knob (a disc of the same picture) turns to the tick: ALL left, WET up, WIDTH right
+    const float ang = (pos == 0 ? -47.0f : pos == 1 ? 0.0f : 47.0f) * juce::MathConstants<float>::pi / 180.0f;
+    const float cx = dial.getCentreX(), cy = dial.getY() + dial.getHeight() * 0.5539f;
+    const auto t = juce::AffineTransform::scale (dial.getWidth() / (float) im.selDisc.getWidth(), dial.getHeight() / (float) im.selDisc.getHeight())
+                       .translated (dial.getX(), dial.getY()).rotated (ang, cx, cy);
+    g.drawImageTransformed (im.selDisc, t);
+    const char* names[3] { "ALL", "WET", "WIDTH" };
+    auto txt = r.withTrimmedLeft (8.0f);
+    drawCaps (g, "LISTEN", txt.removeFromTop (txt.getHeight() * 0.5f), col::dim.brighter (0.15f), 10.0f, juce::Justification::bottomLeft);
+    const bool blink = pos != 0 && (juce::Time::getMillisecondCounter() / 450) % 2 == 0;
+    drawCaps (g, names[pos], txt, pos == 0 ? col::text.withAlpha (0.85f) : (blink ? col::amberHi : col::amber), 11.0f, juce::Justification::topLeft);
+}
+
+void Selector::mouseDown (const juce::MouseEvent& e)
+{
+    // click on the left / top / right of the dial jumps there, anywhere else steps to the next position
+    const float h = (float) getHeight(), x = (float) e.x, y = (float) e.y;
+    int p = (pos + 1) % 3;
+    if (x < h)
+    {
+        const float a = std::atan2 (x - h * 0.5f, -(y - h * 0.55f)) * 180.0f / juce::MathConstants<float>::pi;
+        p = a < -22.0f ? 0 : (a > 22.0f ? 2 : 1);
+    }
+    pos = p; repaint();
+    if (onChange) onChange (pos);
+}
+
+void Lcd::tick()
+{
+    juce::Font f (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 12.5f, juce::Font::bold));
+    const float tw = juce::GlyphArrangement::getStringWidth (f, text.toUpperCase());
+    const float box = (float) getWidth() * 0.80f;
+    if (tw <= box) { offset = 0; return; }
+    if (hold > 0) { --hold; return; }
+    offset += 1.6f;
+    if (offset > tw + 40.0f) { offset = 0; hold = 30; }
+    repaint();
+}
+
+void Lcd::paint (juce::Graphics& g)
+{
+    const auto& im = Images::get();
+    auto r = getLocalBounds().toFloat();
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+    g.drawImage (im.lcd, r, juce::RectanglePlacement::stretchToFit);
+    auto glass = juce::Rectangle<float> (r.getX() + r.getWidth() * 0.075f, r.getY() + r.getHeight() * 0.25f, r.getWidth() * 0.85f, r.getHeight() * 0.50f);
+    g.saveState();
+    g.reduceClipRegion (glass.toNearestInt());
+    juce::Font f (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 12.5f, juce::Font::bold));
+    const auto t = text.toUpperCase();
+    const float tw = juce::GlyphArrangement::getStringWidth (f, t);
+    g.setFont (f);
+    auto draw = [&] (float x)
+    {
+        const auto area = juce::Rectangle<float> (x, glass.getY(), tw + 4.0f, glass.getHeight());
+        g.setColour (col::amber.withAlpha (0.22f)); g.drawText (t, area.translated (0, 0.6f), juce::Justification::centredLeft, false);   // glow
+        g.setColour (col::amberHi.interpolatedWith (col::amber, 0.55f)); g.drawText (t, area, juce::Justification::centredLeft, false);
+    };
+    if (tw <= glass.getWidth()) draw (glass.getX() + 2.0f);
+    else { draw (glass.getX() + 2.0f - offset); draw (glass.getX() + 2.0f - offset + tw + 40.0f); }
+    g.restoreState();
+    // glass reflection
+    juce::ColourGradient refl (juce::Colours::white.withAlpha (0.06f), glass.getX(), glass.getY(), juce::Colours::white.withAlpha (0.0f), glass.getX(), glass.getCentreY(), false);
+    g.setGradientFill (refl); g.fillRect (glass.withHeight (glass.getHeight() * 0.5f));
 }
 
 //==============================================================================
@@ -432,7 +580,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     setLookAndFeel (&lnf);
     setOpaque (true);
     addAndMakeVisible (display); addAndMakeVisible (meters); addAndMakeVisible (pill);
-    for (auto* b : { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB, &matchB, &listenB }) addAndMakeVisible (*b);
+    for (auto* b : std::initializer_list<juce::Component*> { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB, &matchB, &listenSel, &blackSw, &lcd }) addAndMakeVisible (*b);
     eqTab.underlineWhenOn = widthTab.underlineWhenOn = true;
     eqTab.setToggleState (true, juce::dontSendNotification);
     eqTab.onClick = [this] { display.setMode (0); eqTab.setToggleState (true, juce::dontSendNotification); widthTab.setToggleState (false, juce::dontSendNotification); };
@@ -443,8 +591,11 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     clearB.onClick = [this] { proc.clearLearn(); statusText = "Learned voice cleared."; };
     advancedB.onClick = [this] { setAdvanced (! proc.advancedOpen); };
     matchB.onClick = [this] { toggleLoudMatch(); };
-    listenB.onClick = [this] { proc.listenMode = (proc.listenMode.load() + 1) % 3; proc.markDirty(); };
-    listenB.setTooltip ("LISTEN: ALL = normal, WET = reverb + echo only (with the ducking), WIDTH = width layer only. Not saved.");
+    listenSel.onChange = [this] (int p) { proc.listenMode = p; proc.markDirty(); };
+    listenSel.setTooltip ("LISTEN: ALL = normal, WET = reverb + echo only (with the ducking), WIDTH = width layer only. Not saved.");
+    blackSw.setTooltip ("Reverb: SUNO (fitted to the Suno vocals) or BLACK (long, dense, wide, blooming)");
+    blackSw.setClickingTogglesState (true);
+    advancedB.setTooltip ("Advanced controls");
     matchB.setTooltip ("Measures your output while you play, then holds the gain that matches the Suno vocal's loudness");
     pill.onPrev = [this] { stepPreset (-1); };
     pill.onNext = [this] { stepPreset (1); };
@@ -491,6 +642,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     widthAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "wOn", widthLamp);
     echoAtt  = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "dlyOn", echoLamp);
     syncAtt  = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "dlySync", syncB);
+    blackAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "revBlack", blackSw);
     revLamp.setTooltip ("Reverb on/off"); widthLamp.setTooltip ("Vocal width on/off"); echoLamp.setTooltip ("Echo on/off");
     syncB.setTooltip ("Sync the echo to the project tempo");
 
@@ -569,7 +721,6 @@ void Root::placeKnob (const juce::String& id, float cx, float cy, int size)
 void Root::setAdvanced (bool open)
 {
     proc.advancedOpen = open;
-    advancedB.setButtonText (open ? "ADVANCED  -" : "ADVANCED  +");
     advancedB.setToggleState (open, juce::dontSendNotification);
     for (auto& id : drawerIds) { knobs[id]->slider.setVisible (open); knobs[id]->label.setVisible (open); }
     if (onAdvanced) onAdvanced (open);
@@ -599,9 +750,10 @@ void Root::paint (juce::Graphics& g)
             glowLine (g, { bx, cy - h / 2, bx, cy + h / 2 }, col::cream, 1.6f, 0.75f);
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
-        drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.13.3", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v1.14", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
     }
+    // v1.14: the maker's copper name plate (bottom left)
+    g.drawImage (im.nameplate, juce::Rectangle<float> (112, 734, 232, 37), juce::RectanglePlacement::stretchToFit);
     // section titles
     drawCaps (g, "Tone", { 70, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
     drawCaps (g, "Space", { 366, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
@@ -630,10 +782,10 @@ void Root::paint (juce::Graphics& g)
 void Root::resized()
 {
     pill.setBounds (410, 51, 300, 50);
-    loadB.setBounds (722, 60, 78, 32);
-    saveB.setBounds (800, 60, 78, 32);
-    learnB.setBounds (878, 60, 132, 32);
-    clearB.setBounds (1010, 60, 84, 32);
+    loadB.setBounds (716, 60, 80, 32);
+    saveB.setBounds (802, 60, 80, 32);
+    learnB.setBounds (888, 60, 112, 32);
+    clearB.setBounds (1006, 60, 80, 32);
 
     // glass display (inside the faceplate well) + tabs, meters, AMOUNT
     display.setBounds (144, 182, 580, 207);
@@ -658,10 +810,12 @@ void Root::resized()
     echoLamp.setBounds (910, 441, 20, 20);
     delayInfo.setBounds (940, 442, 192, 18);
 
-    status.setBounds (120, 742, 470, 20);
-    listenB.setBounds (600, 738, 140, 28);
-    matchB.setBounds (742, 738, 200, 28);
-    advancedB.setBounds (960, 738, 140, 28);
+    status.setVisible (false);
+    lcd.setBounds (356, 732, 168, 42);
+    listenSel.setBounds (540, 731, 110, 44);
+    matchB.setBounds (664, 738, 230, 30);
+    advancedB.setBounds (904, 740, 176, 26);
+    blackSw.setBounds (446, 429, 130, 44);
 
     // Advanced side module (x 1200-1680): columns and rows inside its four sections
     const float c[4] { kW + 80.0f, kW + 180.0f, kW + 280.0f, kW + 380.0f };
@@ -683,12 +837,10 @@ void Root::tick()
     learnB.recording = learning;
     if (learning) learnB.repaint();
     if (! learning && statusText.startsWith ("Learning")) { juce::String msg; proc.stopLearn (msg); statusText = msg; }
-    {   // LISTEN: blinks while soloing so a bounce is never made by accident
+    {   // LISTEN: the word blinks while soloing so a bounce is never made by accident
         const int lm = proc.listenMode.load();
-        const juce::String t = lm == 1 ? "LISTEN  WET" : lm == 2 ? "LISTEN  WIDTH" : "LISTEN  ALL";
-        if (listenB.getButtonText() != t) listenB.setButtonText (t);
-        listenB.recording = lm != 0; listenB.setToggleState (lm != 0, juce::dontSendNotification);
-        if (lm != 0) listenB.repaint();
+        listenSel.setPosition (lm);
+        if (lm != 0) listenSel.repaint();
     }
     {   // MATCH LOUDNESS: lamp + seconds while measuring, then the held gain
         const bool matching = proc.isLoudMatching();
@@ -696,7 +848,8 @@ void Root::tick()
         const auto t = matching ? "MEASURING " + juce::String (proc.loudSeconds(), 0) + " S - STOP"
                                 : (std::abs (lg) > 0.05f ? "LOUDNESS " + juce::String (lg >= 0 ? "+" : "") + juce::String (lg, 1) + " DB" : juce::String ("MATCH LOUDNESS"));
         if (matchB.getButtonText() != t) matchB.setButtonText (t);
-        matchB.recording = matching; matchB.setToggleState (matching, juce::dontSendNotification);
+        const bool lit = matching || std::abs (lg) > 0.05f;
+        if (matchB.lit != lit || matchB.blinking != matching) { matchB.lit = lit; matchB.blinking = matching; matchB.repaint(); }
         if (matching) matchB.repaint();
     }
     const auto pn = proc.hasPreset() ? proc.getPresetName() : juce::String ("Suno Lead 01");
@@ -704,6 +857,8 @@ void Root::tick()
     if (statusText.isEmpty())
         statusText = ! proc.hasLearned() ? "Press LEARN and play 20 s or more of your dry vocal (with some s/z)." : "Ready.";
     status.setText (statusText, juce::dontSendNotification);
+    lcd.setText (statusText); lcd.tick();
+    advancedB.setToggleState (proc.advancedOpen, juce::dontSendNotification);
 
     auto m = proc.getMeters();
     meters.update (m);
@@ -725,7 +880,8 @@ void Root::tick()
             if ((bool) s.getProperties().getWithDefault ("off", false) != off) { s.getProperties().set ("off", off); s.repaint(); }
         }
     };
-    setOff ({ "revLevel", "decay", "predelay", "duck", "width", "wetHpf", "wetLpf", "duckRel", "rwLow", "rwMid", "rwHigh" }, ! revLamp.getToggleState());
+    setOff ({ "revLevel", "decay", "predelay", "duck", "width", "wetHpf", "wetLpf", "duckRel" }, ! revLamp.getToggleState());
+    setOff ({ "rwLow", "rwMid", "rwHigh" }, ! revLamp.getToggleState() || blackSw.getToggleState());   // BLACK has its own width per band
     setOff ({ "wLevel", "wTone", "wMotion", "lwLow", "lwMid", "lwHigh" }, ! widthLamp.getToggleState());
     setOff ({ "dlyLevel", "dlyFb", "dlyTime", "dlyToRev", "dwLow", "dwMid", "dwHigh" }, ! echoLamp.getToggleState());
 

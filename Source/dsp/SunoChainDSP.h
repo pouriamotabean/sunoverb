@@ -113,6 +113,10 @@ struct Params
     float wetHpf = 300.0f, wetLpf = 5000.0f, wetBumpHz = 2500.0f, wetBumpDb = 2.0f, wetMudDb = -5.0f, wetAirDb = 10.0f;   // v1.13 tail tone fitted to Suno (was ~3 dB muddy, 5-7 dB dark)
     float width = 1.0f;
     float reverbLevelDb = -10.0f;   // un-ducked wet level relative to the dry vocal (stationary signal)
+    // v1.14 reverb mode: 0 = SUNO (fitted to the Suno stems), 1 = BLACK (long, dense, wide, blooming; see BlackReverb)
+    int reverbMode = 0;
+    float blackRtMul = 1.8f, blackHighMul = 0.6f, blackXoverHz = 4500.0f, blackWidth = 1.2f, blackLevelDb = 4.0f;
+    std::array<float, 3> blackBandDb { 0.0f, -1.0f, -4.0f };   // tail width per band (Blackhole: ~0 / -1 / -4 dB side-minus-mid)
 
     // ducking of the wet bus by the dry vocal
     float duckDb = 7.0f, duckAttackMs = 5.0f, duckReleaseMs = 120.0f;
@@ -747,6 +751,117 @@ struct FDNReverb
 };
 
 //==============================================================================
+// v1.14 BLACK reverb: a long, dense, slowly moving space in the spirit of a "black hole" reverb.
+//  - 16-line FDN (Hadamard 16), lines 60-210 ms: ~2 s of delay in the loop, so the modes are packed tightly
+//    (no metallic ring in the low mids);
+//  - a short allpass inside every line + two pre-diffusers: dense from the first moment;
+//  - a slow "swell" path (three long allpasses) feeding the lines as well: the tail blooms and peaks
+//    ~0.4-0.5 s after the note instead of at once;
+//  - every line drifts slowly (two incommensurate sines, < 3 cents): the tail moves without a chorus/detune;
+//  - L and R are taken from orthogonal sign patterns of all 16 lines: the tail decorrelates and opens wide.
+struct BlackReverb
+{
+    static constexpr int N = 16;
+    std::array<DelayLine, N> lines, lap;
+    std::array<int, N> lapLen {};
+    std::array<float, N> len {}, gLow {}, gHigh {}, lpState {}, ph1 {}, ph2 {}, inc1 {}, inc2 {};
+    float lpA = 0, modSamp = 0, outScale = 1, lapG = 0.5f; double fs = 48000;
+    DelayLine pre;
+    static constexpr int kPre = 4, kSwell = 3;
+    std::array<DelayLine, kPre> pd; std::array<int, kPre> pdLen {};
+    std::array<DelayLine, kSwell> sw; std::array<int, kSwell> swLen {};
+    float swellMix = 0.7f, swellG = 0.62f, earlyMix = 0.0f, swLpA = 1.0f; std::array<float, 3> swLp {};
+
+    void prepare (double s)
+    {
+        fs = s;
+        for (auto& d : lines) d.allocate ((int) (0.30 * fs));
+        for (auto& d : lap) d.allocate ((int) (0.02 * fs));
+        for (auto& d : pd) d.allocate ((int) (0.03 * fs));
+        for (auto& d : sw) d.allocate ((int) (0.75 * fs));
+        pre.allocate ((int) (0.6 * fs));
+        for (int i = 0; i < N; ++i)
+        {
+            ph1[(size_t) i] = 0.37f * (float) i; ph2[(size_t) i] = 1.91f * (float) i;
+            inc1[(size_t) i] = (float) (2 * kPi * (0.11 + 0.023 * i) / fs);
+            inc2[(size_t) i] = (float) (2 * kPi * (0.29 + 0.041 * ((i * 7) % N)) / fs);
+        }
+        clear();
+    }
+    void clear()
+    {
+        for (auto& d : lines) d.clear(); for (auto& d : lap) d.clear(); for (auto& d : pd) d.clear(); for (auto& d : sw) d.clear();
+        pre.clear(); lpState.fill (0); swLp.fill (0);
+    }
+    // rt60: mid decay (s); highMul: decay above the crossover relative to it
+    void set (float rt60, float highMul, float crossoverHz)
+    {
+        static const float base[N] = { 61.3f, 67.1f, 71.9f, 79.3f, 87.7f, 95.3f, 103.9f, 113.3f,
+                                       121.7f, 131.1f, 142.3f, 151.9f, 163.7f, 177.1f, 191.3f, 207.9f };
+        static const float lapMs[N] = { 3.1f, 4.3f, 5.3f, 6.1f, 3.7f, 4.9f, 5.9f, 7.1f, 3.3f, 4.1f, 5.1f, 6.7f, 3.9f, 4.7f, 5.7f, 7.3f };
+        const float rtL = std::max (0.2f, rt60), rtH = std::max (0.2f, rt60 * highMul);
+        double g2 = 0;
+        for (int i = 0; i < N; ++i)
+        {
+            len[(size_t) i] = (float) (base[i] * 0.001 * fs);
+            const float tot = len[(size_t) i] + (float) (lapMs[i] * 0.001 * fs);   // the line's allpass adds its delay
+            gLow[(size_t) i]  = (float) std::pow (10.0, -3.0 * tot / (rtL * fs));
+            gHigh[(size_t) i] = (float) std::pow (10.0, -3.0 * tot / (rtH * fs));
+            g2 += (double) gLow[(size_t) i] * gLow[(size_t) i];
+            lapLen[(size_t) i] = std::max (1, (int) (lapMs[i] * 0.001 * fs));
+        }
+        g2 /= N;
+        swLpA = (float) (1.0 - std::exp (-2 * kPi * 9000.0 / fs));   // the swell path darkens a little each pass
+        lpA = (float) (1.0 - std::exp (-2 * kPi * crossoverHz / fs));
+        modSamp = (float) (0.00045 * fs);   // +/- 0.45 ms, at 0.1-0.9 Hz: < 3 cents of drift
+        swellMix = 0.8f; swellG = 0.7f; lapG = 0.5f;
+        earlyMix = 0.45f;   // a little of the diffused input straight to both sides: the tail starts narrower and opens up
+        outScale = (float) (std::sqrt (1.0 - g2) * 2.72);   // same steady-state calibration as the SUNO reverb
+        static const float pdMs[kPre] = { 4.1f, 6.3f, 9.7f, 14.9f };
+        for (int i = 0; i < kPre; ++i) pdLen[(size_t) i] = std::max (1, (int) (pdMs[i] * 0.001 * fs));
+        static const float swMs[kSwell] = { 89.0f, 127.0f, 173.0f };
+        for (int i = 0; i < kSwell; ++i) swLen[(size_t) i] = std::max (1, (int) (swMs[i] * 1.3f * 0.001 * fs));
+    }
+    static inline float allpass (DelayLine& d, int n, float g, float x)
+    {
+        const float z = d.read (n - 1); const float v = x + g * z; d.push (v); return z - g * v;
+    }
+    inline void process (float in, float predelaySamples, float& outL, float& outR)
+    {
+        pre.push (in);
+        float x = pre.readFrac (std::max (0.0f, predelaySamples));
+        for (int i = 0; i < kPre; ++i) x = allpass (pd[(size_t) i], pdLen[(size_t) i], 0.72f, x);
+        float sx = x;
+        for (int i = 0; i < kSwell; ++i) { sx = allpass (sw[(size_t) i], swLen[(size_t) i], swellG, sx); swLp[(size_t) i] += swLpA * (sx - swLp[(size_t) i]); sx = swLp[(size_t) i]; }
+        const float inj = (1.0f - swellMix) * x + swellMix * sx;
+
+        float y[N];
+        for (int i = 0; i < N; ++i)
+        {
+            auto& a = ph1[(size_t) i]; a += inc1[(size_t) i]; if (a > (float) (2 * kPi)) a -= (float) (2 * kPi);
+            auto& b = ph2[(size_t) i]; b += inc2[(size_t) i]; if (b > (float) (2 * kPi)) b -= (float) (2 * kPi);
+            const float d = len[(size_t) i] + modSamp * (1.0f + 0.6f * std::sin (a) + 0.4f * std::sin (b));
+            float v = lines[(size_t) i].readFrac (d);
+            v = allpass (lap[(size_t) i], lapLen[(size_t) i], lapG, v);
+            lpState[(size_t) i] += lpA * (v - lpState[(size_t) i]);
+            y[i] = gLow[(size_t) i] * lpState[(size_t) i] + gHigh[(size_t) i] * (v - lpState[(size_t) i]);
+        }
+        // outputs: two orthogonal sign patterns over all lines (decorrelated L / R)
+        static const float sL[N] = { 1, 1, -1, 1, -1, 1, 1, -1, 1, -1, -1, 1, 1, -1, 1, -1 };
+        static const float sR[N] = { 1, -1, 1, 1, 1, -1, 1, 1, -1, -1, 1, -1, 1, 1, -1, -1 };
+        float l = 0, r = 0;
+        for (int i = 0; i < N; ++i) { l += sL[i] * y[i]; r += sR[i] * y[i]; }
+        outL = (l * 0.25f * 1.414f + earlyMix * inj) * outScale; outR = (r * 0.25f * 1.414f + earlyMix * inj) * outScale;
+        // Hadamard 16 (fast WHT), normalised
+        for (int h = 1; h < N; h <<= 1)
+            for (int i = 0; i < N; i += h << 1)
+                for (int j = i; j < i + h; ++j) { const float a = y[j], b = y[j + h]; y[j] = a + b; y[j + h] = a - b; }
+        static const float inSign[N] = { 1, -1, 1, 1, -1, 1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1 };
+        for (int i = 0; i < N; ++i) lines[(size_t) i].push (y[i] * 0.25f + inj * inSign[i] * 0.25f);
+    }
+};
+
+//==============================================================================
 struct Learner
 {
     // collects spectrum (4096 FFT frames) + 50 ms crest blocks of the raw input
@@ -1278,6 +1393,7 @@ public:
     Crisp crisp; Biquad airShelf; float airShelfDb = 0; ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
     StereoDelay delay;
     FDNReverb rev;
+    BlackReverb blk;
     MicroWidth widthLayer;
     SideBands revSB, layerSB, delaySB;
     Learner learner;
@@ -1294,7 +1410,7 @@ public:
     float freezeHf = 0.063f, rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
     float trFast = 0, trSlow = 0, trFa = 0, trFr = 0, trSa = 0, trSr = 0, trGainDb = 0, trSm = 0, punchAmt = 0;
     float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, delaySend = 0, satDrive = 1, satMix = 0;
-    float predelaySamp = 0;
+    float predelaySamp = 0; int lastRevMode = -1;
     double fs = 48000;
     std::array<float, kNumBands> lastCorrection {}, lastSibDelta {};
     bool sibValid = false;
@@ -1318,7 +1434,7 @@ public:
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs);
         excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset();
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
-        voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs);
+        voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs); blk.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
         revSB.prepare (fs); layerSB.prepare (fs); delaySB.prepare (fs);
         widthMeter.prepare (fs, 8.0);
@@ -1328,7 +1444,7 @@ public:
         setParams (p);
     }
     int getLatency() const { return lookahead; }
-    void reset() { rev.clear(); delay.l.clear(); delay.r.clear(); laL.clear(); laR.clear(); laRaw.clear(); c1.reset(); c2.reset(); duckGr = duckEnv = 0; }
+    void reset() { rev.clear(); blk.clear(); delay.l.clear(); delay.r.clear(); laL.clear(); laR.clear(); laRaw.clear(); c1.reset(); c2.reset(); duckGr = duckEnv = 0; }
 
     void setParams (const Params& np)
     {
@@ -1456,15 +1572,17 @@ public:
         delaySend = (p.delayOn && amt > 0) ? std::clamp (p.delayToReverb, 0.0f, 1.0f) * dbToGain (p.delayLevelDb + 6.0f) : 0.0f;
 
         rev.set (p);
+        if (p.reverbMode == 1) blk.set (p.rt60 * p.blackRtMul, p.blackHighMul, p.blackXoverHz);
+        if (p.reverbMode != lastRevMode) { rev.clear(); blk.clear(); lastRevMode = p.reverbMode; }
         predelaySamp = (float) (p.predelayMs * 0.001 * fs);
         wetHp.setHPF (fs, std::max (20.0f, p.wetHpf), 0.9);
         wetLp.setLPF (fs, std::min ((float) (fs * 0.45), p.wetLpf), 0.8);
         wetMud.setPeak (fs, 500.0, 0.7, p.wetMudDb);
         wetAir.setHighShelf (fs, 5000.0, p.wetAirDb, 0.7);
         wetBump.setPeak (fs, p.wetBumpHz, 1.0, p.wetBumpDb);
-        wetGain = (p.reverbOn && amt > 0) ? dbToGain (p.reverbLevelDb) * amt : 0.0f;
+        wetGain = (p.reverbOn && amt > 0) ? dbToGain (p.reverbLevelDb + (p.reverbMode == 1 ? p.blackLevelDb : 0.0f)) * amt : 0.0f;
         widthLayer.set (p, amt);
-        revSB.set (p.xoverLowHz, p.xoverHighHz, p.revBandDb);
+        revSB.set (p.xoverLowHz, p.xoverHighHz, p.reverbMode == 1 ? p.blackBandDb : p.revBandDb);
         layerSB.set (p.xoverLowHz, p.xoverHighHz, p.layerBandDb);
         delaySB.set (p.xoverLowHz, p.xoverHighHz, p.delayBandDb);
 
@@ -1577,10 +1695,12 @@ public:
             }
             if (wetGain > 0)
             {
-                float rl, rr; rev.process (mono + 0.5f * (dl + dr) * delaySend, predelaySamp, rl, rr);
+                float rl, rr;
+                if (p.reverbMode == 1) blk.process (mono + 0.5f * (dl + dr) * delaySend, predelaySamp, rl, rr);
+                else rev.process (mono + 0.5f * (dl + dr) * delaySend, predelaySamp, rl, rr);
                 rl = wetAir.process (wetMud.process (wetBump.process (wetLp.process (wetHp.process (rl, 0), 0), 0), 0), 0);
                 rr = wetAir.process (wetMud.process (wetBump.process (wetLp.process (wetHp.process (rr, 1), 1), 1), 1), 1);
-                float m = 0.5f * (rl + rr), s = revSB.process (0.5f * (rl - rr) * p.width);
+                float m = 0.5f * (rl + rr), s = revSB.process (0.5f * (rl - rr) * (p.reverbMode == 1 ? p.blackWidth * p.width / 0.775f : p.width));
                 wl += (m + s) * wetGain; wr += (m - s) * wetGain;
             }
             // ducking by dry level

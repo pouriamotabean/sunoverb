@@ -144,6 +144,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     p.push_back (std::make_unique<APF> (juce::ParameterID { "satDrive", 1 }, "Sat Drive", NRange (0, 24), 6.0f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "satMix", 1 }, "Sat Mix", NRange (0, 100), 15.0f, pct));
     p.push_back (std::make_unique<APB> (juce::ParameterID { "revOn", 1 }, "Reverb On", true));
+    p.push_back (std::make_unique<APB> (juce::ParameterID { "revBlack", 7 }, "Reverb BLACK", false));   // v1.14: SUNO / BLACK
     p.push_back (std::make_unique<APF> (juce::ParameterID { "revLevel", 1 }, "Reverb Level", NRange (-40, 6), -5.5f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "predelay", 1 }, "Pre-delay", NRange (0, 500), 205.0f, ms));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "decay", 1 }, "Decay", skewed (0.3f, 10.0f, 2.5f), 4.64f, sec));
@@ -235,6 +236,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.satDriveDb = v ("satDrive");
     p.satMix = v ("satMix") / 100.0f;
     p.reverbOn = v ("revOn") > 0.5f;
+    p.reverbMode = v ("revBlack") > 0.5f ? 1 : 0;
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -341,6 +343,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
     set ("satDrive", num (json, "saturation.drive_db", 6.0));
     set ("satMix", num (json, "saturation.mix", 0.15) * 100.0);
     set ("revOn", num (json, "reverb.on", 1.0));
+    set ("revBlack", num (json, "reverb.black", 0.0));
     set ("revLevel", num (json, "reverb.level_db", -5.5));
     set ("predelay", num (json, "reverb.predelay_ms", 205.0));
     set ("decay", num (json, "reverb.rt60_s", 4.64));
@@ -430,6 +433,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "saturation.drive_db", v ("satDrive"));
     put (j, "saturation.mix", v ("satMix") / 100.0);
     put (j, "reverb.on", v ("revOn") > 0.5);
+    put (j, "reverb.black", v ("revBlack") > 0.5);
     put (j, "reverb.level_db", v ("revLevel"));
     put (j, "reverb.predelay_ms", v ("predelay"));
     put (j, "reverb.rt60_s", v ("decay"));
