@@ -1,0 +1,274 @@
+{
+ "format": "SunoChainPreset",
+ "version": 7,
+ "name": "Black Male",
+ "source_file": "average of vocal.wav, suno2.wav, suno3.wav, suno5.wav",
+ "eq": {
+  "target_curve_hz": [
+   50,
+   63,
+   80,
+   100,
+   125,
+   160,
+   200,
+   250,
+   315,
+   400,
+   500,
+   630,
+   800,
+   1000,
+   1250,
+   1600,
+   2000,
+   2500,
+   3150,
+   4000,
+   5000,
+   6300,
+   8000,
+   10000,
+   12500,
+   16000
+  ],
+  "target_curve_db": [
+   -17.32,
+   -15.32,
+   -11.32,
+   -9.32,
+   -6.32,
+   -0.32,
+   2.68,
+   8.3,
+   7.99,
+   2.64,
+   4.77,
+   7.83,
+   5.28,
+   1.96,
+   0.39,
+   -2.4,
+   -5.82,
+   -7.03,
+   -9.44,
+   -13.98,
+   -15.72,
+   -15.82,
+   -17.23,
+   -17.65,
+   -22.48,
+   -32.84
+  ],
+  "amount": 1.0,
+  "max_boost_db": 12.0,
+  "max_cut_db": 24.0,
+  "max_boost_high_db": 15.0
+ },
+ "dynamics": {
+  "target_crest_db": 8.8,
+  "target_spread400_db": 5.06,
+  "default_total_gr_db": 6.0,
+  "comp1": {
+   "ratio": 4.0,
+   "attack_ms": 2.0,
+   "release_ms": 50.0,
+   "share": 0.55
+  },
+  "comp2": {
+   "ratio": 4.0,
+   "attack_ms": 30.0,
+   "release_ms": 300.0
+  },
+  "leveler_factor": 2.1,
+  "punch": 1.5
+ },
+ "deesser": {
+  "method": "sz_match",
+  "sib_curve_hz": [
+   2000,
+   2500,
+   3150,
+   4000,
+   5000,
+   6300,
+   8000,
+   10000,
+   12500,
+   16000
+  ],
+  "sib_curve_db": [
+   -22.96,
+   -19.66,
+   -19.34,
+   -14.27,
+   -12.65,
+   -10.53,
+   -10.97,
+   -10.32,
+   -15.17,
+   -24.36
+  ],
+  "n_sib_segments": 49,
+  "split_hz": 4000.0,
+  "sib_median_db": -2.73,
+  "sib_p90_db": 3.54,
+  "n_sibilants": 55,
+  "ratio": 6.0,
+  "max_cut_db": 20.0
+ },
+ "saturation": {
+  "drive_db": 6.0,
+  "mix": 0.0,
+  "measured": false
+ },
+ "delay": {
+  "detected": false,
+  "user_set": true,
+  "on": true,
+  "time_ms": 375.0,
+  "feedback": 0.25,
+  "level_db": -20.0,
+  "hpf_hz": 300.0,
+  "lpf_hz": 5000.0,
+  "ping_pong": true,
+  "sync": true,
+  "note": 1,
+  "to_reverb": 0.5,
+  "band_width_db": [
+   -9.0,
+   -3.0,
+   -1.5
+  ],
+  "note_text": "v1.13 safe default: ping-pong ~70 % L/R, 1/8 dotted, 25 % feedback, 300 Hz-5 kHz, -20 dB, ducked with the reverb, 50 % into the reverb"
+ },
+ "width_layer": {
+  "on": true,
+  "level_db": -23.02,
+  "delay_ms": 1.0,
+  "shift_hz": 1.419,
+  "tilt_db": 1.305,
+  "hpf_hz": 131.92,
+  "lpf_hz": 16000.0,
+  "bloom_db": 40.0,
+  "bloom_ms": 138.395,
+  "side_only": true,
+  "band_db": [
+   9.36,
+   7.0,
+   1.5
+  ]
+ },
+ "multiband_width": {
+  "xover_low_hz": 300.0,
+  "xover_high_hz": 4000.0,
+  "note": "side-only gains per band (low/mid/high) for reverb, width layer and delay; mid/mono untouched"
+ },
+ "reverb": {
+  "on": true,
+  "predelay_ms": 186.5,
+  "rt60_s": 3.54,
+  "rt60_low_mul": 1.0,
+  "rt60_high_mul": 0.7,
+  "crossover_hz": 1500.0,
+  "size": 1.0,
+  "mod_depth": 0.5,
+  "diffusion": 0.75,
+  "diffusion_size": 2.0,
+  "early_ms": 22.0,
+  "early_level_db": -100.0,
+  "hpf_hz": 300.0,
+  "lpf_hz": 9000.0,
+  "bump_hz": 2000.0,
+  "bump_db": 2.62,
+  "width": 0.775,
+  "level_db": -16.54,
+  "band_width_db": [
+   -3.41,
+   -2.98,
+   -19.04
+  ],
+  "black": true
+ },
+ "ducking": {
+  "depth_db": 4.0,
+  "attack_ms": 5.0,
+  "release_ms": 600.0
+ },
+ "measurements": {
+  "suno": {
+   "width_meter_singing_db": [
+    -15.8,
+    -14.91,
+    -20.51
+   ],
+   "width_meter_pauses_db": [
+    -32.67,
+    -28.47,
+    -43.22
+   ]
+  },
+  "averaged_from": [
+   "Suno Male 01",
+   "Suno Male 02",
+   "Suno Male 03",
+   "Suno Male 05"
+  ]
+ },
+ "loudness": {
+  "integrated_lufs": -13.64,
+  "note": "ITU-R BS.1770 integrated loudness of the Suno vocal stem (reverb included); target of MATCH LOUDNESS"
+ },
+ "calibration": {
+  "method": "ear calibration from POURIA_SUNO_VERB",
+  "values": {
+   "reverb_level_db": -6.4,
+   "duck_add_db": 3.9,
+   "duck_release_mul": 4.7,
+   "duck_release_max_ms": 600.0,
+   "rt60_mul": 0.8,
+   "reverb_width_mul": 1.23,
+   "reverb_hpf_min_hz": 300.0,
+   "saturation_mix": 0.0
+  },
+  "low_floor_raised_db": {
+   "160": 5.4,
+   "125": 10.8,
+   "100": 13.8,
+   "80": 15.3,
+   "63": 13.0,
+   "50": 14.0
+  },
+  "before": {
+   "level": -7.04,
+   "rt60": 4.42,
+   "hpf": 80.0,
+   "width": 0.63,
+   "duck": 2.5,
+   "rel": 90.91
+  },
+  "v1_13": {
+   "reverb_level_db": -3.1,
+   "duck_db": -4.4,
+   "layer_level_db": 5.1,
+   "layer_band_mid_db": 7.0,
+   "layer_band_high_db": 0.0,
+   "rev_band_mid_add_db": -3.0,
+   "rev_band_high_add_db": -9.3
+  }
+ },
+ "user": {
+  "amount": 100.0,
+  "output_db": 0.0,
+  "eq_low": 35.0,
+  "compression": 100.0,
+  "deess": 100.0,
+  "dyn_peak": 100.0,
+  "dyn_leveler": 100.0,
+  "dyn_speed": 100.0,
+  "dyn_punch": 100.0,
+  "harmonics": 100.0,
+  "air_db": 5.0
+ },
+ "description": "BLACK reverb: long, dense, wide tail; stronger ducking keeps the words clear."
+}
