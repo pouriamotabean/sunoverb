@@ -1,4 +1,4 @@
-# Suno Chain v1.15
+# Suno Chain v1.15.1
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -6,6 +6,16 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
 1. Replace the `Source/` folder in the repo with the one from this zip (`CMakeLists.txt` and `.github/workflows/build.yml` have not changed since the VS2026 fix; replacing everything is fine too).
 2. Push → **Actions** → when it's green, download **SunoChain-VST3** → copy it to `C:\Program Files\Common Files\VST3` → rescan in Cubase.
 3. If it's red, send me the log.
+
+## New in v1.15.1 (crash fix, BREATH)
+- **Crash when removing the plugin (Windows)**: the GUI images were function-static juce::Image objects that
+  outlived JUCE's Direct2D resources when the host unloaded the plugin. They now belong to the open editor
+  (SharedResourcePointer) and are decoded without the ImageCache.
+- **BREATH** (Advanced, Tone/Dynamics, default 40 % = -8 dB, 100 % = -20 dB): breaths between phrases are turned
+  down before the compressor / rider / EQ can lift them. Detected on the raw input 20 ms ahead: unvoiced, some energy
+  left below 1 kHz (an s has none), 16-50 dB under your sung level, 120 ms or more after the last sung sound, 40 ms or
+  longer. Test: inhales added to d112 come out 12-16 dB lower at 100 %; on d112 / dry17 / dry25 nothing else is
+  touched (renders identical to v1.15 with no breaths in them). Saved in presets as user.breath.
 
 ## New in v1.15 (FREEZE)
 - **FREEZE** (glass button under SPACE, automatable): the reverb tail holds forever and nothing new enters it
