@@ -1,4 +1,4 @@
-# Suno Chain v1.13.1
+# Suno Chain v1.15
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -7,6 +7,12 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
 2. Push → **Actions** → when it's green, download **SunoChain-VST3** → copy it to `C:\Program Files\Common Files\VST3` → rescan in Cubase.
 3. If it's red, send me the log.
 
+## New in v1.15 (FREEZE)
+- **FREEZE** (glass button under SPACE, automatable): the reverb tail holds forever and nothing new enters it
+  (SUNO and BLACK). Lossless while frozen (modulation parks on whole-sample delays): level constant within 0.1 dB
+  over 28 s, singing during the freeze does not enter, release decays normally, no click on/off. Not saved in
+  presets (it is a performance control); the host is told a 60 s tail while frozen.
+
 ## New in v1.14 (BLACK reverb + new controls)
 - **BLACK reverb** (lever next to SPACE, up = BLACK): 16-line FDN (60-210 ms lines, an allpass in every line),
   a slow swell path, gentle per-line drift (< 3 cents), L/R from orthogonal line mixes. Measured against Pouria's
@@ -14,9 +20,22 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
   0.09 (same), less low-mid ringing than SUNO, colour between SUNO and raw Blackhole. DECAY knob = x1.8, the reverb
   width-per-band knobs are SUNO-only (dimmed in BLACK). Same loudness as SUNO while singing. SUNO mode unchanged
   (bit-identical renders). Saved as reverb.black in presets.
+- **Presets renamed and re-edited**: Suno Male (neutral), Black Male (BLACK, stronger ducking), Dreamy Male (BLACK,
+  longer, echo into the reverb, wider), Blue Male (close, clean, short reverb, no echo), Velvet Male (warm, less air,
+  more saturation), Radio Male (band-limited colour + short echo), Pouria Signature, Suno Lead Reference (default).
+  Male 03 dropped (too close to the average). Old preset files are not loaded any more by the arrows if removed from
+  the preset folder.
+- **Factory presets built in**: the 8 presets travel inside the plugin and are written into
+  Documents/SunoChain/Presets when a file of that name is missing (your own files are never overwritten), so the
+  .vst3 alone is enough to give the plugin to someone.
+- **Audit fixes**: the host is told the real tail (decay x1.8 in BLACK + predelay + echo, was a fixed 10 s);
+  switching SUNO/BLACK fades the old tail out at its own level (was cut); presets are fully checked before anything
+  is applied (EQ 26 values, S/Z 10, widths 3, numbers finite, newer versions refused with a message); FFT without
+  the slow std::complex multiply (same results, less CPU in the meters / Learn); version 1.14.0 everywhere.
+- **GUI**: no status screen (messages show as a quiet line for a few seconds); "by Pouria Motabean" under the logo.
 - **New controls** (design/assets/v114, cut from the ChatGPT images): flat metal LOAD / SAVE / LEARN / CLEAR,
   rotary LISTEN selector (ALL / WET / WIDTH), glass MATCH LOUDNESS button (lit = gain held, blinks while
-  measuring), ADVANCED slide switch, status in a small scrolling display, copper name plate.
+  measuring), ADVANCED slide switch.
 
 ## New in v1.13.3 (rider)
 - **Rider**: 0-100 % unchanged; above 100 % it really rides (200 % = +/-6 dB, 80 % of the way): phrase-level
