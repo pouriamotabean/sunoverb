@@ -1,4 +1,4 @@
-# Suno Chain v1.11
+# Suno Chain v1.13.1
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -6,6 +6,45 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
 1. Replace the `Source/` folder in the repo with the one from this zip (`CMakeLists.txt` and `.github/workflows/build.yml` have not changed since the VS2026 fix; replacing everything is fine too).
 2. Push → **Actions** → when it's green, download **SunoChain-VST3** → copy it to `C:\Program Files\Common Files\VST3` → rescan in Cubase.
 3. If it's red, send me the log.
+
+## New in v1.14 (BLACK reverb + new controls)
+- **BLACK reverb** (lever next to SPACE, up = BLACK): 16-line FDN (60-210 ms lines, an allpass in every line),
+  a slow swell path, gentle per-line drift (< 3 cents), L/R from orthogonal line mixes. Measured against Pouria's
+  Blackhole (Size 90, Gravity 12, clap + vocal solo): RT60 6.2 s (Blackhole 6.3), tail opens to L/R correlation
+  0.09 (same), less low-mid ringing than SUNO, colour between SUNO and raw Blackhole. DECAY knob = x1.8, the reverb
+  width-per-band knobs are SUNO-only (dimmed in BLACK). Same loudness as SUNO while singing. SUNO mode unchanged
+  (bit-identical renders). Saved as reverb.black in presets.
+- **New controls** (design/assets/v114, cut from the ChatGPT images): flat metal LOAD / SAVE / LEARN / CLEAR,
+  rotary LISTEN selector (ALL / WET / WIDTH), glass MATCH LOUDNESS button (lit = gain held, blinks while
+  measuring), ADVANCED slide switch, status in a small scrolling display, copper name plate.
+
+## New in v1.13.3 (rider)
+- **Rider**: 0-100 % unchanged; above 100 % it really rides (200 % = +/-6 dB, 80 % of the way): phrase-level
+  spread 6.8 dB off -> 6.2 (100 %) -> 4.7 (200 %); tone unchanged. Everything else = v1.13.1.
+- The "z" in «روز خوش» (d112, ~12.5 s) is parked: S/Z variants (per-event, one-fraction rule, full take-back) did
+  not fix it by ear and 200 % damaged s/sh. Its voiced buzz carries a very pure 880 Hz harmonic (+30 dB over its
+  surroundings, also in the dry, likely Auto-Tune), heard as ringing once the take is louder. To be re-checked on
+  other vocals at the end before any fix (candidate: a resonance suppressor for sharp tonal peaks).
+
+## New in v1.13.1 (the three open points, found and fixed)
+- **Consonant detector bug**: it ran AFTER the Match EQ. The EQ's high lift made 34 % of vowels look like consonants, so the compressor, the rider and the crisp were frozen for ~40 % of the singing. Now it runs on the voice before the EQ (7.7 % frozen, i.e. real consonants only). Syllable-level jumpiness 2.13 -> 1.98 dB (Suno 1.54; the rest comes from the Match EQ's low cut, which makes the level follow the pitch a little more).
+- **AIR and the S/Z**: the S/Z Match did not know about the AIR shelf, so AIR +5 made weakly detected sibilants up to 3 dB brighter. It now includes AIR in what it takes back. Overall "s" level -5.5 dB (v1.12/1.13 with AIR: -4.4, v1.9: -4.9): about 1 dB more de-essing, as you asked; never darker than you sang it. The loud "z" at 0:13 is 2.6 dB lower than in v1.9.
+- **Note-onset narrowing of the highs works now**: v1.13 subtracted a high-passed copy, whose phase shift ADDED energy. Now the layer's own top band is turned down for ~20 ms at each new note. High-band width at note starts vs Suno: +3.2 -> +1.5 dB; everything else within ~2 dB.
+
+## New in v1.13 (sound round: rider, reverb, width, delay)
+- **Vocal RIDER** (Advanced, the old "Leveler" knob): rides words/phrases toward your typical level, +/-2 dB at 100 % (+/-4 at 200 %, **0 = off**), slow (~300 ms), measured **20 ms ahead** so it is never late, held in pauses and on consonants. It replaces the leveler, which made phrases too flat: phrase-level movement is now 3.8 dB (v1.12: 2.8, Suno 4.8, your dry 6.3). The GR meter also shows the rider's cuts. Plugin latency is now 20 ms (Cubase compensates).
+- **Reverb tone**: 250 Hz-1 kHz -5 dB (it was muddy) and +10 dB air shelf from 5 kHz (it was 5-7 dB darker than Suno). Tail tone now within ~2 dB of Suno above 500 Hz.
+- **Reverb + width** (presets): more reverb under the voice and less bloom after phrases (ducking 6.4 -> 2 dB, level -3 dB), vocal layer +5 dB with the mid band opened, reverb side narrower in mid/high. Width over time vs Suno (singing / phrase tail, low/mid/high): within ~+/-2 dB (v1.12 was 5-7 dB off). Your Blackhole reference measures about the same.
+- **Delay** (presets): ping-pong ~70 % L/R, 1/8 dotted, 25 % feedback, 300 Hz-5 kHz, -20 dB, ducked with the reverb, 50 % into the reverb.
+- **SATURATION** 100 % = the old 130 %. **AIR** default +5 dB. **S/Z** +12 %.
+- Real-plugin check on your takes: consonants -0.8 to +1.8 dB vs v1.9 (the two quiet ones are brighter because of AIR +5, which you asked for).
+
+## New in v1.12 (OTT-style crisp, more air, typed values)
+- **SATURATION is now an OTT-style "crisp"** (your v1.11 note: the exciter distorted at 100 %, sweet spot ~25 %, and you wanted OTT-like). The voice is split at 2.5 kHz; each band is pulled toward its own typical level: quiet top detail up (up to +7 dB), peaks slightly down, the body only gently. Nothing new is generated, so no distortion. Level-normalised, untouched in pauses and on every consonant (s/z/sh/ch/j: the gain is back to 0 within ~3 ms). 100 % = soft (quiet top detail +1.5 dB); turn it up for more.
+- **Match EQ air**: boosts from 8 kHz up are x1.5 (ramping from 4 kHz), so 100 % now gives what you heard at 150 % on top, without raising the mids.
+- **AIR** (Advanced) is now a plain high shelf at 10 kHz (+/-12 dB).
+- **Type a value**: click the text under any knob, type ("300", "-6", "12k"), Enter. Esc cancels; double-click the knob = default.
+- Real-plugin check on your takes: consonants -1.3 to +0.3 dB vs v1.9 (the voiced "z" +0.1).
 
 ## New in v1.11 (harmonic saturation, stage 2)
 - **SATURATION is now a harmonic exciter** (the old tanh saturation is gone). Measured on the 4 Suno vocals vs your voice after the chain: Suno's vowels have ~2 dB more *harmonic* energy at 4-8 kHz and ~4 dB more air at 10-16 kHz. Two bands of your voice (2-4.5 kHz and 5-8 kHz) go through Chebyshev shapers that add the octave and octave+fifth of what goes in, level-normalised (same amount loud or soft), gated off on s/z/sh/ch and breaths. At 100 % it lands on Suno's average: air -19.2 dB (Suno -19.1), harmonic ratio 4-8 kHz 6.9 dB (Suno 7.0), 8-12 kHz 4.7 (4.8).

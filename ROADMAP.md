@@ -3,6 +3,10 @@
 **Done in v1.2:** S/Z balance (EQ no longer makes "s"/"z" ~10 dB louder), de-ess meter, compression calibrated on an uncompressed vocal.
 **Done in v1.10:** LISTEN (wet / width solo), ear-calibrated stage-1 presets (Male 01/02/03/05/Average + POURIA SUNO VERB 2), Match Loudness peak cap, mandatory real-plugin regression before delivery. Stage 1 analyzer: --exclude ranges, phrase-end detection fixed for mono-tailed stems. Male 04 rejected (doubles throughout).
 **Done in v1.11:** stage 2 harmonic exciter (SATURATION + AIR), fitted to the Suno average; key select dropped (shaping a sung note only yields its own harmonics).
+**Done in v1.12:** OTT-style crisp replaces the exciter; Match EQ air x1.5 above 8 kHz; AIR = shelf; typed values under knobs.
+**Done in v1.13:** vocal rider (20 ms lookahead) replaces the leveler; reverb tone fixed (mud/dark); reverb/width/ducking fitted to Suno's width-over-time; delay safe defaults; sat/air/S/Z defaults by ear. Note-onset narrowing of the highs tried, no gain, left off.
+**Done in v1.13.3:** rider really rides above 100 % (S/Z = v1.13.1). Parked: the "z" of d112 at 12.5 s (pure 880 Hz harmonic in the voiced buzz, in the dry too) - re-test on several other vocals at the end; tried and rejected: per-event S/Z, one-fraction S/Z, full take-back (200 % damages s/sh). Crisp lifts quiet phrase tails 6-9 dB in the top band (v1.14 candidate).
+**Done in v1.14:** BLACK reverb (fitted to Pouria's Blackhole clap + vocal solo) and the new controls. **Next:** BLUE (shimmer layer or near/clean, undecided), FREEZE, the parked d112 "z" re-check on other vocals, rhythmic gate (low priority).
 **Next:** width envelope (Suno: highs ~4.5 dB narrower in the first 50 ms of each note; low band 6-7 dB wider than ours while singing; phrase tails open +7 dB low/mid at once, highs after ~150 ms; our tails 4-7 dB too wide in the mid band). After Suno Chain: one-button screen + master-audio recorder plugin (1080p MP4 with sound, auto latency sync).
 **Done in v1.9:** sibilant ceiling off (it ate s/sh/ch), S/Z never darker than the raw voice. Open: the voiced "z" (+3 dB) needs a fix that is verified in the real plugin, not only offline.
 **Done in v1.8:** per-sibilant ceiling (single loud s/z), voiced z detection, **Match Loudness (stage 3)**.
@@ -11,6 +15,10 @@
 **Done in v1.4:** premium GUI, first version (faceplate, knobs, pills from ChatGPT; lamps, curves, meters, glass in code; Advanced drawer as a second module; resizable; preset stepping).
 **Done in v1.3:** S/Z Match (sibilant spectrum matched to Suno, detection before the EQ, no effect on vowels; replaces the v1.2 balancer that dulled the vowel after each "s"), multiband width for reverb / width layer / echo (LR4, side only) fitted per band from the Suno vocal, WIDTH graph (output vs Suno per band, singing and pauses), Advanced drawer (first version).
 
+
+## Added Oct 11 (after the Slimz Reverb X video)
+- **Rhythmic gate on the reverb**: tempo-synced from Cubase; step patterns (8 patterns, up to 16 steps), rates 1/4-1/64 incl. triplet and dotted, attack/decay/sustain/release, mix, randomize; off by default (Advanced).
+- **Reverb FREEZE / infinite**: a small button in the main SPACE section (or Advanced reverb): holds the current reverb tail forever (feedback ~1, input muted) until released.
 
 ## Agreed order of stages
 0. **Build and test v1.3**: build, Load the new preset, Learn again (20+ s, with s/z), listen; check the WIDTH tab.
