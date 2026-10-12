@@ -12,13 +12,19 @@ def preset_to_flat(pr):
     f = dict(targetCurve=pr["eq"]["target_curve_db"], eqAmount=pr["eq"]["amount"], targetCrestDb=pr["dynamics"]["target_crest_db"],
              targetSpreadDb=pr["dynamics"]["target_spread400_db"], comp2Ratio=pr["dynamics"]["comp2"]["ratio"],
              comp2AttackMs=pr["dynamics"]["comp2"]["attack_ms"], comp2ReleaseMs=pr["dynamics"]["comp2"]["release_ms"],
-             deessFreq=pr["deesser"]["freq_hz"], deessTargetDb=pr["deesser"]["target_ratio_db"],
              satDriveDb=pr["saturation"]["drive_db"], satMix=pr["saturation"]["mix"],
              predelayMs=r["predelay_ms"], rt60=r["rt60_s"], rt60LowMul=r["rt60_low_mul"], rt60HighMul=r["rt60_high_mul"],
              wetHpf=r["hpf_hz"], wetLpf=r["lpf_hz"], wetBumpHz=r["bump_hz"], wetBumpDb=r["bump_db"], width=r["width"],
              reverbLevelDb=r["level_db"], duckDb=dk["depth_db"], duckReleaseMs=dk["release_ms"],
              delayOn=dl["on"], delayLevelDb=dl["level_db"], delayFeedback=dl["feedback"])
     f.update(extra)
+    # v1.3: multiband width + S/Z Match target
+    f["revBandDb"] = r.get("band_width_db", [0.0, 0.0, 0.0])
+    f["layerBandDb"] = w.get("band_db", [0.0, 0.0, 0.0]) if w else [0.0, 0.0, 0.0]
+    f["delayBandDb"] = dl.get("band_width_db", [0.0, 0.0, 0.0])
+    mb = pr.get("multiband_width", {})
+    f["xoverLowHz"] = mb.get("xover_low_hz", 300.0); f["xoverHighHz"] = mb.get("xover_high_hz", 4000.0)
+    if pr["deesser"].get("sib_curve_db"): f["sibTarget"] = pr["deesser"]["sib_curve_db"]
     if "leveler_factor" in pr["dynamics"]: f["levelerFactor"] = pr["dynamics"]["leveler_factor"]
     if "sync" in dl: f.update(delaySync=dl["sync"], delayNote=dl["note"], delayToReverb=dl["to_reverb"])
     if w: f.update(widthOn=w["on"], widthLevelDb=w["level_db"], widthDelayMs=w["delay_ms"], widthShiftHz=w["shift_hz"], widthTiltDb=w["tilt_db"],
