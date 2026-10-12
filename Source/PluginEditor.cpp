@@ -17,35 +17,43 @@ const juce::Colour faint  { 0xff4a4744 };
 }
 
 //==============================================================================
+// v1.15.1: the images live only while an editor is open (owned through a SharedResourcePointer in Root) and are
+// decoded without the ImageCache. A function-static juce::Image outlived JUCE's Direct2D resources on Windows and
+// crashed the host when the plugin was removed / the DLL unloaded.
+static Images* currentImages = nullptr;
+
+Images::Images()
+{
+    auto load = [] (const unsigned char* d, std::size_t n) { return juce::ImageFileFormat::loadFrom (d, n); };
+    faceplate  = load (assets::faceplate_jpg, assets::faceplate_jpgSize);
+    sidePanel  = load (assets::side_panel_jpg, assets::side_panel_jpgSize);
+    knob       = load (assets::knob_std_png, assets::knob_std_pngSize);
+    knobLarge  = load (assets::knob_large_png, assets::knob_large_pngSize);
+    pillLong   = load (assets::pill_long_png, assets::pill_long_pngSize);
+    pillShort  = load (assets::pill_short_png, assets::pill_short_pngSize);
+    buttonUp   = load (assets::button_up_png, assets::button_up_pngSize);
+    buttonDown = load (assets::button_down_png, assets::button_down_pngSize);
+    slot       = load (assets::slot_small_png, assets::slot_small_pngSize);
+    toggleUp   = load (assets2::toggle_up_png, assets2::toggle_up_pngSize);
+    toggleDown = load (assets2::toggle_down_png, assets2::toggle_down_pngSize);
+    glassOff   = load (assets2::glass_off_png, assets2::glass_off_pngSize);
+    glassOn    = load (assets2::glass_on_png, assets2::glass_on_pngSize);
+    slideLeft  = load (assets2::slide_left_png, assets2::slide_left_pngSize);
+    slideRight = load (assets2::slide_right_png, assets2::slide_right_pngSize);
+    flatUp     = load (assets2::flat_up_png, assets2::flat_up_pngSize);
+    flatDown   = load (assets2::flat_down_png, assets2::flat_down_pngSize);
+    lcd        = load (assets2::lcd_png, assets2::lcd_pngSize);
+    selRing    = load (assets2::selector_ring_png, assets2::selector_ring_pngSize);
+    selDisc    = load (assets2::selector_disc_png, assets2::selector_disc_pngSize);
+    currentImages = this;
+}
+
+Images::~Images() { if (currentImages == this) currentImages = nullptr; }
+
 const Images& Images::get()
 {
-    static Images im = []
-    {
-        Images i;
-        auto load = [] (const unsigned char* d, std::size_t n) { return juce::ImageCache::getFromMemory (d, (int) n); };
-        i.faceplate  = load (assets::faceplate_jpg, assets::faceplate_jpgSize);
-        i.sidePanel  = load (assets::side_panel_jpg, assets::side_panel_jpgSize);
-        i.knob       = load (assets::knob_std_png, assets::knob_std_pngSize);
-        i.knobLarge  = load (assets::knob_large_png, assets::knob_large_pngSize);
-        i.pillLong   = load (assets::pill_long_png, assets::pill_long_pngSize);
-        i.pillShort  = load (assets::pill_short_png, assets::pill_short_pngSize);
-        i.buttonUp   = load (assets::button_up_png, assets::button_up_pngSize);
-        i.buttonDown = load (assets::button_down_png, assets::button_down_pngSize);
-        i.slot       = load (assets::slot_small_png, assets::slot_small_pngSize);
-        i.toggleUp   = load (assets2::toggle_up_png, assets2::toggle_up_pngSize);
-        i.toggleDown = load (assets2::toggle_down_png, assets2::toggle_down_pngSize);
-        i.glassOff   = load (assets2::glass_off_png, assets2::glass_off_pngSize);
-        i.glassOn    = load (assets2::glass_on_png, assets2::glass_on_pngSize);
-        i.slideLeft  = load (assets2::slide_left_png, assets2::slide_left_pngSize);
-        i.slideRight = load (assets2::slide_right_png, assets2::slide_right_pngSize);
-        i.flatUp     = load (assets2::flat_up_png, assets2::flat_up_pngSize);
-        i.flatDown   = load (assets2::flat_down_png, assets2::flat_down_pngSize);
-        i.lcd        = load (assets2::lcd_png, assets2::lcd_pngSize);
-        i.selRing    = load (assets2::selector_ring_png, assets2::selector_ring_pngSize);
-        i.selDisc    = load (assets2::selector_disc_png, assets2::selector_disc_pngSize);
-        return i;
-    }();
-    return im;
+    jassert (currentImages != nullptr);   // only painted while an editor (Root) is alive
+    return *currentImages;
 }
 
 // side module image (1024 x 1536): dividers at 24.2 / 48 / 71.6 % of the height -> logical y 194 / 384 / 573
@@ -622,7 +630,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     struct D { const char* id; const char* name; bool violet; };
     for (const auto& d : std::vector<D> {
             { "eqLow", "Low Boost", false }, { "air", "Air", false }, { "loudGain", "Loudness", false }, { "output", "Output", false },
-            { "dynPeak", "Peak", false }, { "dynLeveler", "Rider", false }, { "dynSpeed", "Speed", false }, { "dynPunch", "Attack", false },
+            { "dynPeak", "Peak", false }, { "dynLeveler", "Rider", false }, { "breath", "Breath", false }, { "dynSpeed", "Speed", false }, { "dynPunch", "Attack", false },
             { "width", "Width", false }, { "wetHpf", "HPF", false }, { "wetLpf", "LPF", false }, { "duckRel", "Duck Rel", false },
             { "rwLow", "Low", false }, { "rwMid", "Mid", false }, { "rwHigh", "High", false },
             { "lwLow", "Low", true }, { "lwMid", "Mid", true }, { "lwHigh", "High", true },
@@ -752,7 +760,7 @@ void Root::paint (juce::Graphics& g)
             glowLine (g, { bx, cy - h / 2, bx, cy + h / 2 }, col::cream, 1.6f, 0.75f);
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.15", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v1.15.1", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
         drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
     }
     // section titles
@@ -823,7 +831,11 @@ void Root::resized()
     const float c[4] { kW + 80.0f, kW + 180.0f, kW + 280.0f, kW + 380.0f };
     const int ks = 40;
     placeKnob ("eqLow", c[0], 64, ks); placeKnob ("air", c[1], 64, ks); placeKnob ("loudGain", c[2], 64, ks); placeKnob ("output", c[3], 64, ks);
-    placeKnob ("dynPeak", c[0], 144, ks); placeKnob ("dynLeveler", c[1], 144, ks); placeKnob ("dynSpeed", c[2], 144, ks); placeKnob ("dynPunch", c[3], 144, ks);
+    {   // v1.15.1: five in the dynamics row (BREATH added)
+        const float c5[5] { kW + 70.0f, kW + 155.0f, kW + 240.0f, kW + 325.0f, kW + 410.0f };
+        placeKnob ("dynPeak", c5[0], 144, ks); placeKnob ("dynLeveler", c5[1], 144, ks); placeKnob ("breath", c5[2], 144, ks);
+        placeKnob ("dynSpeed", c5[3], 144, ks); placeKnob ("dynPunch", c5[4], 144, ks);
+    }
     placeKnob ("width", c[0], kSec[1] + 62, ks); placeKnob ("wetHpf", c[1], kSec[1] + 62, ks); placeKnob ("wetLpf", c[2], kSec[1] + 62, ks); placeKnob ("duckRel", c[3], kSec[1] + 62, ks);
     placeKnob ("rwLow", c[0], kSec[1] + 140, ks); placeKnob ("rwMid", c[1], kSec[1] + 140, ks); placeKnob ("rwHigh", c[2], kSec[1] + 140, ks);
     placeKnob ("lwLow", c[0], kSec[2] + 72, ks); placeKnob ("lwMid", c[1], kSec[2] + 72, ks); placeKnob ("lwHigh", c[2], kSec[2] + 72, ks);

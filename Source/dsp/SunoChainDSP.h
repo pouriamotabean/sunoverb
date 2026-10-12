@@ -115,7 +115,8 @@ struct Params
     float reverbLevelDb = -10.0f;   // un-ducked wet level relative to the dry vocal (stationary signal)
     // v1.14 reverb mode: 0 = SUNO (fitted to the Suno stems), 1 = BLACK (long, dense, wide, blooming; see BlackReverb)
     int reverbMode = 0;
-    bool reverbFreeze = false;   // v1.15 FREEZE: the tail holds forever, nothing new enters
+    bool reverbFreeze = false;
+    float breathDb = 8.0f;   // v1.15.1 BREATH: cut on breaths between phrases (knob 0-100 % = 0-20 dB)   // v1.15 FREEZE: the tail holds forever, nothing new enters
     float blackRtMul = 1.8f, blackHighMul = 0.6f, blackXoverHz = 4500.0f, blackWidth = 1.2f, blackLevelDb = 4.0f;
     std::array<float, 3> blackBandDb { 0.0f, -1.0f, -4.0f };   // tail width per band (Blackhole: ~0 / -1 / -4 dB side-minus-mid)
 
@@ -872,6 +873,51 @@ struct BlackReverb
 };
 
 //==============================================================================
+// v1.15.1 BREATH: breaths between phrases are turned down. The chain lifts everything quiet (compressor, rider,
+// the Match EQ's high lift on a dark voice), so an audible breath in the dry vocal came out loud and bright.
+// Detected on the raw input, 20 ms ahead (the plugin's lookahead), so the cut is in place when the breath plays:
+//  - unvoiced: little energy below 1 kHz (vowels and voiced consonants have most of theirs there);
+//  - not an s/sh: some energy below 1 kHz is left (an s has almost none), the top is not everything;
+//  - quiet: 16-50 dB below your sung level (a breathy "h" inside a phrase is louder than an inhale);
+//  - outside the singing: at least 120 ms after the last voiced sound, lasting 40 ms or more.
+struct BreathControl
+{
+    Biquad lp1, lp2, hp1, hp2; double fs = 48000;
+    float eF = 0, eL = 0, eH = 0, envC = 0, refDb = -200, refC = 0, g = 1, atk = 0, rel = 0, target = 1;
+    int counter = 0, sinceVoiced = 1 << 30, breathFor = 0;
+    float depthDb = 8.0f;   // cut at the BREATH knob (0..20 dB)
+    void prepare (double s)
+    {
+        fs = s; lp1.setLPF (fs, 1000.0); lp2.setLPF (fs, 1000.0); hp1.setHPF (fs, 4000.0); hp2.setHPF (fs, 4000.0);
+        for (auto* b : { &lp1, &lp2, &hp1, &hp2 }) b->reset();
+        eF = eL = eH = 0; refDb = -200; g = 1; target = 1; counter = 0; sinceVoiced = 1 << 30; breathFor = 0;
+        envC = msToCoef (8.0f, fs); refC = (float) std::exp (-16.0 / (2.0 * fs));
+        atk = msToCoef (15.0f, fs); rel = msToCoef (40.0f, fs);
+    }
+    // m: raw mono input (before the EQ), un-delayed
+    inline void detect (float m)
+    {
+        const float lo = lp2.process (lp1.process (m, 0), 0), hi = hp2.process (hp1.process (m, 0), 0);
+        eF = envC * eF + (1 - envC) * m * m; eL = envC * eL + (1 - envC) * lo * lo; eH = envC * eH + (1 - envC) * hi * hi;
+        if ((++counter & 15) != 0) return;
+        const float fDb = 10 * std::log10 (eF + 1e-14f), lowShare = 10 * std::log10 ((eL + 1e-15f) / (eF + 1e-14f)), hfShare = 10 * std::log10 ((eH + 1e-15f) / (eF + 1e-14f));
+        const bool voiced = lowShare > -4.0f && fDb > -70.0f && (refDb < -150.0f || fDb > refDb - 30.0f);
+        if (voiced)
+        {
+            sinceVoiced = 0;
+            refDb = refDb < -150.0f ? fDb : refC * refDb + (1 - refC) * fDb;   // your sung level (~2 s average)
+        }
+        else if (sinceVoiced < (1 << 30)) sinceVoiced += 16;
+        // breath noise keeps some energy below 1 kHz (-15..-5 dB); an s / sh / ch has almost none (< -15 dB)
+        const bool breathy = ! voiced && refDb > -150.0f && lowShare < -5.0f && lowShare > -15.0f && hfShare < -2.0f
+                             && fDb < refDb - 16.0f && fDb > refDb - 50.0f && sinceVoiced > (int) (0.12 * fs);
+        breathFor = breathy ? breathFor + 16 : 0;
+        target = breathFor >= (int) (0.04 * fs) ? dbToGain (-depthDb) : 1.0f;
+    }
+    inline float gain() { g = target < g ? atk * g + (1 - atk) * target : rel * g + (1 - rel) * target; return g; }
+};
+
+//==============================================================================
 struct Learner
 {
     // collects spectrum (4096 FFT frames) + 50 ms crest blocks of the raw input
@@ -1404,6 +1450,7 @@ public:
     StereoDelay delay;
     FDNReverb rev;
     BlackReverb blk;
+    BreathControl breath;
     MicroWidth widthLayer;
     SideBands revSB, layerSB, delaySB;
     Learner learner;
@@ -1420,6 +1467,7 @@ public:
     float freezeHf = 0.063f, rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
     float trFast = 0, trSlow = 0, trFa = 0, trFr = 0, trSa = 0, trSr = 0, trGainDb = 0, trSm = 0, punchAmt = 0;
     float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, delaySend = 0, satDrive = 1, satMix = 0;
+    bool breathOn = false;
     float predelaySamp = 0; int lastRevMode = -1, oldRevMode = -1; float oldRevFade = 0.0f, oldRevCoef = 0.999f, oldRevComp = 1.0f, freezeAmt = 0.0f, freezeCoef = 0.999f;
     double fs = 48000;
     std::array<float, kNumBands> lastCorrection {}, lastSibDelta {};
@@ -1444,7 +1492,7 @@ public:
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs);
         excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset();
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
-        voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs); blk.prepare (fs);
+        voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs); blk.prepare (fs); breath.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
         revSB.prepare (fs); layerSB.prepare (fs); delaySB.prepare (fs);
         widthMeter.prepare (fs, 8.0);
@@ -1582,6 +1630,7 @@ public:
         delaySend = (p.delayOn && amt > 0) ? std::clamp (p.delayToReverb, 0.0f, 1.0f) * dbToGain (p.delayLevelDb + 6.0f) : 0.0f;
 
         rev.set (p);
+        breath.depthDb = std::clamp (p.breathDb, 0.0f, 20.0f); breathOn = p.breathDb > 0.05f && amt > 0;
         if (p.reverbMode == 1) blk.set (p.rt60 * p.blackRtMul, p.blackHighMul, p.blackXoverHz);
         if (p.reverbMode != lastRevMode)
         {   // v1.14: the old reverb's tail fades out over ~0.3 s instead of being cut (no click when switching)
@@ -1641,6 +1690,7 @@ public:
                 const float m0 = 0.5f * (preL + preR), lo = voiceLp2.process (voiceLp1.process (m0, 0), 0);
                 const float hi = voiceHp2.process (voiceHp1.process (m0, 0), 0);
                 vAll = vCoef * vAll + (1 - vCoef) * m0 * m0; vLow = vCoef * vLow + (1 - vCoef) * lo * lo; vHigh = vCoef * vHigh + (1 - vCoef) * hi * hi;
+                if (breathOn) breath.detect (m0);
             }
             // not a plain vowel: little low energy (s, sh, ch, t, k, breath) or a fricative's hiss on top (z, j, v)
             const bool unvoiced = vLow < p.voicedShare * vAll || vHigh > freezeHf * vAll;
@@ -1671,7 +1721,8 @@ public:
             rmsEnv = rmsCoef * rmsEnv + (1 - rmsCoef) * compMono * compMono * g1 * g1;
             const float g2 = c2.computeGain (std::sqrt (rmsEnv), consonant || pause);
             maxGr1 = std::max (maxGr1, vc.grDb() + std::max (0.0f, -rideG)); maxGr2 = std::max (maxGr2, c2.gr);   // GR meter shows the rider's cuts too
-            l = laOutL * rideGain * g1 * g2; r = laOutR * rideGain * g1 * g2;
+            const float bg = breathOn ? breath.gain() : 1.0f;   // v1.15.1 BREATH
+            l = laOutL * rideGain * g1 * g2 * bg; r = laOutR * rideGain * g1 * g2 * bg;
             deess.apply (l, r);
             if (p.sibCeiling) sibCeil.process (laRaw.read (lookahead - 1), l, r, deess.k, ! consonant && ! pause, std::clamp (p.deessAmount, 0.0f, 2.0f));
             else sibCeil.cutDb = 0;

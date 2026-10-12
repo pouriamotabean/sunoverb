@@ -14,7 +14,10 @@ struct Images
     juce::Image faceplate, sidePanel, knob, knobLarge, pillLong, pillShort, buttonUp, buttonDown, slot;
     // v1.14 controls
     juce::Image toggleUp, toggleDown, glassOff, glassOn, slideLeft, slideRight, flatUp, flatDown, lcd, selRing, selDisc;
+    Images();
+    ~Images();
     static const Images& get();
+    JUCE_DECLARE_NON_COPYABLE (Images)
 };
 
 class LookAndFeel : public juce::LookAndFeel_V4
@@ -186,6 +189,7 @@ private:
     void toggleLoudMatch();
     void setAdvanced (bool open);
 
+    juce::SharedResourcePointer<Images> images;   // first member: alive before any child paints, gone with the editor
     SunoChainProcessor& proc;
     LookAndFeel lnf;
     Display display;

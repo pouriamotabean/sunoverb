@@ -147,6 +147,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     p.push_back (std::make_unique<APB> (juce::ParameterID { "revOn", 1 }, "Reverb On", true));
     p.push_back (std::make_unique<APB> (juce::ParameterID { "revBlack", 7 }, "Reverb BLACK", false));   // v1.14: SUNO / BLACK
     p.push_back (std::make_unique<APB> (juce::ParameterID { "revFreeze", 8 }, "Reverb Freeze", false));   // v1.15 (not in presets)
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "breath", 9 }, "Breath", NRange (0, 100), 40.0f, pct));   // v1.15.1
     p.push_back (std::make_unique<APF> (juce::ParameterID { "revLevel", 1 }, "Reverb Level", NRange (-40, 6), -5.5f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "predelay", 1 }, "Pre-delay", NRange (0, 500), 205.0f, ms));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "decay", 1 }, "Decay", skewed (0.3f, 10.0f, 2.5f), 4.64f, sec));
@@ -286,6 +287,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.reverbOn = v ("revOn") > 0.5f;
     p.reverbMode = v ("revBlack") > 0.5f ? 1 : 0;
     p.reverbFreeze = v ("revFreeze") > 0.5f;
+    p.breathDb = 0.2f * v ("breath");
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -434,6 +436,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
     set ("dynPeak", num (json, "user.dyn_peak", 100.0)); set ("dynLeveler", num (json, "user.dyn_leveler", 100.0));
     set ("dynSpeed", num (json, "user.dyn_speed", 100.0)); set ("dynPunch", num (json, "user.dyn_punch", 100.0));
         set ("harm", num (json, "user.harmonics", 100.0)); set ("air", num (json, "user.air_db", 5.0));
+        set ("breath", num (json, "user.breath", 40.0));
     dirty = true;
     return true;
 }
@@ -510,7 +513,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "user.deess", v ("deess"));
     put (j, "user.dyn_peak", v ("dynPeak")); put (j, "user.dyn_leveler", v ("dynLeveler"));
     put (j, "user.dyn_speed", v ("dynSpeed")); put (j, "user.dyn_punch", v ("dynPunch"));
-    put (j, "user.harmonics", v ("harm")); put (j, "user.air_db", v ("air"));
+    put (j, "user.harmonics", v ("harm")); put (j, "user.air_db", v ("air")); put (j, "user.breath", v ("breath"));
     if (! f.replaceWithText (juce::JSON::toString (j, false))) { error = "Could not write " + f.getFullPathName(); return false; }
     {
         const juce::SpinLock::ScopedLockType sl (presetLock);
