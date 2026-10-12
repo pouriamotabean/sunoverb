@@ -13,7 +13,7 @@ struct Images
 {
     juce::Image faceplate, sidePanel, knob, knobLarge, pillLong, pillShort, buttonUp, buttonDown, slot;
     // v1.14 controls
-    juce::Image toggleUp, toggleDown, glassOff, glassOn, slideLeft, slideRight, flatUp, flatDown, lcd, selRing, selDisc, nameplate;
+    juce::Image toggleUp, toggleDown, glassOff, glassOn, slideLeft, slideRight, flatUp, flatDown, lcd, selRing, selDisc;
     static const Images& get();
 };
 
@@ -194,7 +194,7 @@ private:
     FlatButton loadB { "LOAD" }, saveB { "SAVE" }, learnB { "LEARN" }, clearB { "CLEAR" };
     TextLink eqTab { "EQ", 11.0f }, widthTab { "WIDTH", 11.0f };
     SlideSwitch advancedB { "ADVANCED" };
-    GlassButton matchB { "MATCH LOUDNESS" };
+    GlassButton matchB { "MATCH LOUDNESS" }, freezeB { "FREEZE" };
     Selector listenSel;
     LeverSwitch blackSw;
     Lcd lcd;
@@ -202,12 +202,12 @@ private:
     PushLamp syncB;
     juce::ComboBox noteBox;
     juce::Label status, delayInfo;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> revAtt, widthAtt, echoAtt, syncAtt, blackAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> revAtt, widthAtt, echoAtt, syncAtt, blackAtt, freezeAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> noteAtt;
     std::map<juce::String, std::unique_ptr<Knob>> knobs;
     std::vector<juce::String> drawerIds;
     std::unique_ptr<juce::FileChooser> chooser;
-    juce::String statusText;
+    juce::String statusText, lastStatus; int statusAge = 0;
     int ticks = 0;
 };
 } // namespace ui

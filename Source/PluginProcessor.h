@@ -22,7 +22,15 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 10.0; }
+    // v1.14: the real tail (reverb decay, x1.8 in BLACK, + predelay + echo), so offline exports never cut it
+    double getTailLengthSeconds() const override
+    {
+        auto v = [this] (const char* id) { auto* a = apvts.getRawParameterValue (id); return a != nullptr ? (double) a->load() : 0.0; };
+        if (v ("revFreeze") > 0.5) return 60.0;   // FREEZE holds the tail
+        const double rt = v ("decay") * (v ("revBlack") > 0.5 ? 1.8 : 1.0);
+        const double echo = v ("dlyOn") > 0.5 ? 4.0 : 0.0;
+        return juce::jlimit (2.0, 60.0, v ("predelay") * 0.001 + 1.3 * rt + echo + 0.5);
+    }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -40,6 +48,7 @@ public:
     juce::File currentPresetFile; // for stepping through the preset folder
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     static juce::File presetFolder();
+    void installFactoryPresets();
 
     // preset handling (message thread)
     bool loadPresetFile (const juce::File& f, juce::String& error);

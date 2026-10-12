@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "FactoryPresets.h"
 #include "PluginEditor.h"
 
 namespace
@@ -145,6 +146,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     p.push_back (std::make_unique<APF> (juce::ParameterID { "satMix", 1 }, "Sat Mix", NRange (0, 100), 15.0f, pct));
     p.push_back (std::make_unique<APB> (juce::ParameterID { "revOn", 1 }, "Reverb On", true));
     p.push_back (std::make_unique<APB> (juce::ParameterID { "revBlack", 7 }, "Reverb BLACK", false));   // v1.14: SUNO / BLACK
+    p.push_back (std::make_unique<APB> (juce::ParameterID { "revFreeze", 8 }, "Reverb Freeze", false));   // v1.15 (not in presets)
     p.push_back (std::make_unique<APF> (juce::ParameterID { "revLevel", 1 }, "Reverb Level", NRange (-40, 6), -5.5f, dB));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "predelay", 1 }, "Pre-delay", NRange (0, 500), 205.0f, ms));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "decay", 1 }, "Decay", skewed (0.3f, 10.0f, 2.5f), 4.64f, sec));
@@ -204,8 +206,54 @@ SunoChainProcessor::SunoChainProcessor()
     for (auto* prm : getParameters())
         if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm))
             apvts.addParameterListener (r->getParameterID(), this);
+    installFactoryPresets();
     const juce::SpinLock::ScopedLockType sl (presetLock);
     restorePresetFromTree();   // fills hidden with the built-in (Suno Lead 01) defaults
+}
+
+// v1.14: the factory presets travel inside the plugin. Written into the preset folder when a file of that name is
+// missing (your own presets and edited copies are never overwritten). Message thread (constructor) only.
+void SunoChainProcessor::installFactoryPresets()
+{
+    auto dir = presetFolder();
+    if (! dir.isDirectory()) return;
+    for (const auto& fp : factory::presets)
+    {
+        auto f = dir.getChildFile (fp.file);
+        if (! f.existsAsFile()) f.replaceWithText (juce::String::fromUTF8 (fp.json));
+    }
+}
+
+// v1.14: a preset is checked completely before anything is applied (a broken file never half-loads)
+static bool validatePreset (const juce::var& json, juce::String& error)
+{
+    if (! json.isObject()) { error = "Could not read the preset (not a JSON object)."; return false; }
+    if (json.getProperty ("format", "").toString() != "SunoChainPreset") { error = "Not a Suno Chain preset."; return false; }
+    const int ver = (int) json.getProperty ("version", 1);
+    if (ver > 7) { error = "This preset is from a newer Suno Chain (version " + juce::String (ver) + "). Please update the plugin."; return false; }
+    auto arr = [&] (const juce::var& v, int n, bool required, const char* what) -> bool
+    {
+        if (v.isVoid() || v.isUndefined()) { if (required) { error = juce::String ("Preset is missing ") + what + "."; return false; } return true; }
+        if (! v.isArray() || v.size() != n) { error = juce::String ("Preset has an invalid ") + what + " (needs " + juce::String (n) + " values)."; return false; }
+        for (auto& x : *v.getArray()) if (! (x.isInt() || x.isInt64() || x.isDouble()) || ! std::isfinite ((double) x)) { error = juce::String ("Preset has a non-number in ") + what + "."; return false; }
+        return true;
+    };
+    if (! arr (json["eq"]["target_curve_db"], sc::kNumBands, true, "EQ target curve")) return false;
+    if (! arr (json["eq"]["target_curve_hz"], sc::kNumBands, false, "EQ frequency list")) return false;
+    if (! arr (json["deesser"]["sib_curve_db"], 10, false, "S/Z curve")) return false;
+    for (auto* sec : { "reverb", "delay", "width_layer" })
+        if (! arr (json[sec]["band_width_db"], 3, false, "width per band")) return false;
+    if (! arr (json["width_layer"]["band_db"], 3, false, "width layer bands")) return false;
+    // every number anywhere in the file must be finite
+    std::function<bool (const juce::var&)> finite = [&] (const juce::var& v) -> bool
+    {
+        if (v.isDouble()) return std::isfinite ((double) v);
+        if (v.isArray()) { for (auto& x : *v.getArray()) if (! finite (x)) return false; return true; }
+        if (auto* o = v.getDynamicObject()) { for (auto& p : o->getProperties()) if (! finite (p.value)) return false; }
+        return true;
+    };
+    if (! finite (json)) { error = "Preset contains an invalid number (NaN / infinity)."; return false; }
+    return true;
 }
 
 SunoChainProcessor::~SunoChainProcessor()
@@ -237,6 +285,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.satMix = v ("satMix") / 100.0f;
     p.reverbOn = v ("revOn") > 0.5f;
     p.reverbMode = v ("revBlack") > 0.5f ? 1 : 0;
+    p.reverbFreeze = v ("revFreeze") > 0.5f;
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -319,11 +368,8 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
 {
     juce::var json;
     auto res = juce::JSON::parse (f.loadFileAsString(), json);
-    if (res.failed() || ! json.isObject()) { error = "Could not read JSON: " + res.getErrorMessage(); return false; }
-    if (json.getProperty ("format", "").toString() != "SunoChainPreset") { error = "Not a Suno Chain preset."; return false; }
-
-    auto curveVar = json["eq"]["target_curve_db"];
-    if (! curveVar.isArray() || curveVar.size() != sc::kNumBands) { error = "Preset has no valid EQ target curve."; return false; }
+    if (res.failed()) { error = "Could not read JSON: " + res.getErrorMessage(); return false; }
+    if (! validatePreset (json, error)) return false;
 
     {
         const juce::SpinLock::ScopedLockType sl (presetLock);

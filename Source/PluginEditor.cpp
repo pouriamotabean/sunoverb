@@ -43,7 +43,6 @@ const Images& Images::get()
         i.lcd        = load (assets2::lcd_png, assets2::lcd_pngSize);
         i.selRing    = load (assets2::selector_ring_png, assets2::selector_ring_pngSize);
         i.selDisc    = load (assets2::selector_disc_png, assets2::selector_disc_pngSize);
-        i.nameplate  = load (assets2::nameplate_png, assets2::nameplate_pngSize);
         return i;
     }();
     return im;
@@ -580,7 +579,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     setLookAndFeel (&lnf);
     setOpaque (true);
     addAndMakeVisible (display); addAndMakeVisible (meters); addAndMakeVisible (pill);
-    for (auto* b : std::initializer_list<juce::Component*> { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB, &matchB, &listenSel, &blackSw, &lcd }) addAndMakeVisible (*b);
+    for (auto* b : std::initializer_list<juce::Component*> { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB, &matchB, &freezeB, &listenSel, &blackSw, &lcd }) addAndMakeVisible (*b);
     eqTab.underlineWhenOn = widthTab.underlineWhenOn = true;
     eqTab.setToggleState (true, juce::dontSendNotification);
     eqTab.onClick = [this] { display.setMode (0); eqTab.setToggleState (true, juce::dontSendNotification); widthTab.setToggleState (false, juce::dontSendNotification); };
@@ -607,7 +606,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
         s->setInterceptsMouseClicks (false, false);
         addAndMakeVisible (*s);
     }
-    status.setFont (juce::Font (juce::FontOptions (13.5f)));
+    status.setFont (juce::Font (juce::FontOptions (12.5f)));
     delayInfo.setJustificationType (juce::Justification::centredRight);
     delayInfo.setFont (capsFont (10.5f));
 
@@ -643,6 +642,9 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     echoAtt  = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "dlyOn", echoLamp);
     syncAtt  = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "dlySync", syncB);
     blackAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "revBlack", blackSw);
+    freezeB.setClickingTogglesState (true);
+    freezeB.setTooltip ("FREEZE: the reverb tail holds forever and nothing new enters it (automatable)");
+    freezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "revFreeze", freezeB);
     revLamp.setTooltip ("Reverb on/off"); widthLamp.setTooltip ("Vocal width on/off"); echoLamp.setTooltip ("Echo on/off");
     syncB.setTooltip ("Sync the echo to the project tempo");
 
@@ -750,10 +752,9 @@ void Root::paint (juce::Graphics& g)
             glowLine (g, { bx, cy - h / 2, bx, cy + h / 2 }, col::cream, 1.6f, 0.75f);
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.14", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v1.15", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
     }
-    // v1.14: the maker's copper name plate (bottom left)
-    g.drawImage (im.nameplate, juce::Rectangle<float> (112, 734, 232, 37), juce::RectanglePlacement::stretchToFit);
     // section titles
     drawCaps (g, "Tone", { 70, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
     drawCaps (g, "Space", { 366, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
@@ -810,8 +811,9 @@ void Root::resized()
     echoLamp.setBounds (910, 441, 20, 20);
     delayInfo.setBounds (940, 442, 192, 18);
 
-    status.setVisible (false);
-    lcd.setBounds (356, 732, 168, 42);
+    status.setBounds (112, 742, 250, 20);
+    freezeB.setBounds (384, 738, 150, 30);
+    lcd.setVisible (false);
     listenSel.setBounds (540, 731, 110, 44);
     matchB.setBounds (664, 738, 230, 30);
     advancedB.setBounds (904, 740, 176, 26);
@@ -852,13 +854,20 @@ void Root::tick()
         if (matchB.lit != lit || matchB.blinking != matching) { matchB.lit = lit; matchB.blinking = matching; matchB.repaint(); }
         if (matching) matchB.repaint();
     }
-    const auto pn = proc.hasPreset() ? proc.getPresetName() : juce::String ("Suno Lead 01");
+    const auto pn = proc.hasPreset() ? proc.getPresetName() : juce::String ("Suno Lead Reference");
     if (pill.name != pn) { pill.name = pn; pill.repaint(); }
     if (statusText.isEmpty())
         statusText = ! proc.hasLearned() ? "Press LEARN and play 20 s or more of your dry vocal (with some s/z)." : "Ready.";
-    status.setText (statusText, juce::dontSendNotification);
-    lcd.setText (statusText); lcd.tick();
+    {   // v1.14: no status screen; a message shows as a quiet line for a few seconds (the first-run hint and
+        // LEARN / MATCH in progress stay while they matter)
+        if (statusText != lastStatus) { lastStatus = statusText; statusAge = 0; }
+        else ++statusAge;
+        const bool sticky = ! proc.hasLearned() || proc.isLearning() || proc.isLoudMatching();
+        const bool show = statusText != "Ready." && (sticky || statusAge < 20 * 8);
+        status.setText (show ? statusText : juce::String(), juce::dontSendNotification);
+    }
     advancedB.setToggleState (proc.advancedOpen, juce::dontSendNotification);
+    if (freezeB.lit != freezeB.getToggleState()) { freezeB.lit = freezeB.getToggleState(); freezeB.repaint(); }
 
     auto m = proc.getMeters();
     meters.update (m);

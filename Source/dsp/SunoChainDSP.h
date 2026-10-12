@@ -115,6 +115,7 @@ struct Params
     float reverbLevelDb = -10.0f;   // un-ducked wet level relative to the dry vocal (stationary signal)
     // v1.14 reverb mode: 0 = SUNO (fitted to the Suno stems), 1 = BLACK (long, dense, wide, blooming; see BlackReverb)
     int reverbMode = 0;
+    bool reverbFreeze = false;   // v1.15 FREEZE: the tail holds forever, nothing new enters
     float blackRtMul = 1.8f, blackHighMul = 0.6f, blackXoverHz = 4500.0f, blackWidth = 1.2f, blackLevelDb = 4.0f;
     std::array<float, 3> blackBandDb { 0.0f, -1.0f, -4.0f };   // tail width per band (Blackhole: ~0 / -1 / -4 dB side-minus-mid)
 
@@ -288,15 +289,21 @@ inline void fftInPlace (std::vector<std::complex<float>>& a)
     }
     for (size_t len = 2; len <= n; len <<= 1)
     {
+        // v1.14: plain float arithmetic (std::complex '*' goes through the slow NaN-safe library routine without
+        // -ffast-math; this FFT runs in the audio thread for the meters and Learn)
         double ang = -2 * kPi / (double) len;
-        std::complex<float> wl ((float) std::cos (ang), (float) std::sin (ang));
+        const float wr0 = (float) std::cos (ang), wi0 = (float) std::sin (ang);
+        const size_t h = len / 2;
         for (size_t i = 0; i < n; i += len)
         {
-            std::complex<float> w (1, 0);
-            for (size_t j = 0; j < len / 2; ++j)
+            float wr = 1.0f, wi = 0.0f;
+            for (size_t j = 0; j < h; ++j)
             {
-                auto u = a[i + j], v = a[i + j + len / 2] * w;
-                a[i + j] = u + v; a[i + j + len / 2] = u - v; w *= wl;
+                const float ur = a[i + j].real(), ui = a[i + j].imag();
+                const float xr = a[i + j + h].real(), xi = a[i + j + h].imag();
+                const float vr = xr * wr - xi * wi, vi = xr * wi + xi * wr;
+                a[i + j] = { ur + vr, ui + vi }; a[i + j + h] = { ur - vr, ui - vi };
+                const float t = wr * wr0 - wi * wi0; wi = wr * wi0 + wi * wr0; wr = t;
             }
         }
     }
@@ -657,7 +664,7 @@ struct FDNReverb
     static constexpr int N = 8;
     std::array<DelayLine, N> lines;
     std::array<float, N> len {}, gLow {}, gHigh {}, lpState {}, modPhase {}, modRate {};
-    float lpA = 0, modDepthSamp = 0, outScale = 1; double fs = 48000;
+    float lpA = 0, modDepthSamp = 0, outScale = 1, freeze = 0; double fs = 48000;   // freeze 0..1 (v1.15 FREEZE)
     DelayLine pre;
     std::array<float, 8> erTime {}, erGain {};
     float erLevel = 0.4f;
@@ -731,11 +738,12 @@ struct FDNReverb
             {
                 modPhase[i] += (float) (2 * kPi * modRate[i] / fs);
                 if (modPhase[i] > 2 * kPi) modPhase[i] -= (float) (2 * kPi);
-                d += modDepthSamp * (1.0f + std::sin (modPhase[i]));
+                d += modDepthSamp * (1.0f + std::sin (modPhase[i])) * (1.0f - freeze);
             }
+            if (freeze > 0.999f) d = std::floor (d);   // frozen: whole-sample delays, no interpolation loss
             float v = lines[i].readFrac (d);
             lpState[i] += lpA * (v - lpState[i]);
-            y[i] = gLow[i] * lpState[i] + gHigh[i] * (v - lpState[i]);
+            y[i] = (gLow[i] + (1.0f - gLow[i]) * freeze) * lpState[i] + (gHigh[i] + (1.0f - gHigh[i]) * freeze) * (v - lpState[i]);   // FREEZE: lossless
         }
         // outputs before mixing (decorrelated taps)
         outL = (y[0] - y[2] + y[4] - y[6] + y[1] * 0.5f - y[5] * 0.5f) * outScale * 0.9f + eL * erLevel;
@@ -746,7 +754,8 @@ struct FDNReverb
                 for (int j = i; j < i + h; ++j) { float a = y[j], b = y[j + h]; y[j] = a + b; y[j + h] = a - b; }
         const float norm = 0.35355339f;
         static const float inSign[N] = { 1, -1, 1, 1, -1, 1, -1, -1 };
-        for (int i = 0; i < N; ++i) lines[i].push (y[i] * norm + x * inSign[i] * 0.35355339f);
+        const float xin = x * (1.0f - freeze);   // FREEZE: nothing new enters
+        for (int i = 0; i < N; ++i) lines[i].push (y[i] * norm + xin * inSign[i] * 0.35355339f);
     }
 };
 
@@ -765,7 +774,7 @@ struct BlackReverb
     std::array<DelayLine, N> lines, lap;
     std::array<int, N> lapLen {};
     std::array<float, N> len {}, gLow {}, gHigh {}, lpState {}, ph1 {}, ph2 {}, inc1 {}, inc2 {};
-    float lpA = 0, modSamp = 0, outScale = 1, lapG = 0.5f; double fs = 48000;
+    float lpA = 0, modSamp = 0, outScale = 1, lapG = 0.5f, freeze = 0; double fs = 48000;
     DelayLine pre;
     static constexpr int kPre = 4, kSwell = 3;
     std::array<DelayLine, kPre> pd; std::array<int, kPre> pdLen {};
@@ -833,18 +842,19 @@ struct BlackReverb
         for (int i = 0; i < kPre; ++i) x = allpass (pd[(size_t) i], pdLen[(size_t) i], 0.72f, x);
         float sx = x;
         for (int i = 0; i < kSwell; ++i) { sx = allpass (sw[(size_t) i], swLen[(size_t) i], swellG, sx); swLp[(size_t) i] += swLpA * (sx - swLp[(size_t) i]); sx = swLp[(size_t) i]; }
-        const float inj = (1.0f - swellMix) * x + swellMix * sx;
+        const float inj = ((1.0f - swellMix) * x + swellMix * sx) * (1.0f - freeze);
 
         float y[N];
         for (int i = 0; i < N; ++i)
         {
             auto& a = ph1[(size_t) i]; a += inc1[(size_t) i]; if (a > (float) (2 * kPi)) a -= (float) (2 * kPi);
             auto& b = ph2[(size_t) i]; b += inc2[(size_t) i]; if (b > (float) (2 * kPi)) b -= (float) (2 * kPi);
-            const float d = len[(size_t) i] + modSamp * (1.0f + 0.6f * std::sin (a) + 0.4f * std::sin (b));
+            float d = len[(size_t) i] + modSamp * (1.0f + 0.6f * std::sin (a) + 0.4f * std::sin (b)) * (1.0f - freeze);
+            if (freeze > 0.999f) d = std::floor (d);
             float v = lines[(size_t) i].readFrac (d);
             v = allpass (lap[(size_t) i], lapLen[(size_t) i], lapG, v);
             lpState[(size_t) i] += lpA * (v - lpState[(size_t) i]);
-            y[i] = gLow[(size_t) i] * lpState[(size_t) i] + gHigh[(size_t) i] * (v - lpState[(size_t) i]);
+            y[i] = (gLow[(size_t) i] + (1.0f - gLow[(size_t) i]) * freeze) * lpState[(size_t) i] + (gHigh[(size_t) i] + (1.0f - gHigh[(size_t) i]) * freeze) * (v - lpState[(size_t) i]);
         }
         // outputs: two orthogonal sign patterns over all lines (decorrelated L / R)
         static const float sL[N] = { 1, 1, -1, 1, -1, 1, 1, -1, 1, -1, -1, 1, 1, -1, 1, -1 };
@@ -1410,7 +1420,7 @@ public:
     float freezeHf = 0.063f, rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
     float trFast = 0, trSlow = 0, trFa = 0, trFr = 0, trSa = 0, trSr = 0, trGainDb = 0, trSm = 0, punchAmt = 0;
     float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, delaySend = 0, satDrive = 1, satMix = 0;
-    float predelaySamp = 0; int lastRevMode = -1;
+    float predelaySamp = 0; int lastRevMode = -1, oldRevMode = -1; float oldRevFade = 0.0f, oldRevCoef = 0.999f, oldRevComp = 1.0f, freezeAmt = 0.0f, freezeCoef = 0.999f;
     double fs = 48000;
     std::array<float, kNumBands> lastCorrection {}, lastSibDelta {};
     bool sibValid = false;
@@ -1573,7 +1583,15 @@ public:
 
         rev.set (p);
         if (p.reverbMode == 1) blk.set (p.rt60 * p.blackRtMul, p.blackHighMul, p.blackXoverHz);
-        if (p.reverbMode != lastRevMode) { rev.clear(); blk.clear(); lastRevMode = p.reverbMode; }
+        if (p.reverbMode != lastRevMode)
+        {   // v1.14: the old reverb's tail fades out over ~0.3 s instead of being cut (no click when switching)
+            if (lastRevMode >= 0) { oldRevMode = lastRevMode; oldRevFade = 1.0f; }
+            if (p.reverbMode == 1) blk.clear(); else rev.clear();
+            lastRevMode = p.reverbMode;
+        }
+        oldRevCoef = (float) std::exp (-1.0 / (0.15 * fs));
+        freezeCoef = (float) std::exp (-1.0 / (0.03 * fs));
+        oldRevComp = oldRevMode == p.reverbMode ? 1.0f : dbToGain (oldRevMode == 1 ? p.blackLevelDb : -p.blackLevelDb);   // keep the old tail at its own level
         predelaySamp = (float) (p.predelayMs * 0.001 * fs);
         wetHp.setHPF (fs, std::max (20.0f, p.wetHpf), 0.9);
         wetLp.setLPF (fs, std::min ((float) (fs * 0.45), p.wetLpf), 0.8);
@@ -1696,8 +1714,18 @@ public:
             if (wetGain > 0)
             {
                 float rl, rr;
+                freezeAmt = freezeCoef * freezeAmt + (1.0f - freezeCoef) * (p.reverbFreeze ? 1.0f : 0.0f);
+                rev.freeze = blk.freeze = freezeAmt > 0.999f ? 1.0f : (freezeAmt < 1.0e-4f ? 0.0f : freezeAmt);
                 if (p.reverbMode == 1) blk.process (mono + 0.5f * (dl + dr) * delaySend, predelaySamp, rl, rr);
                 else rev.process (mono + 0.5f * (dl + dr) * delaySend, predelaySamp, rl, rr);
+                if (oldRevFade > 0.0f)
+                {   // the previous mode's tail, no new input, fading out
+                    float ol, orr;
+                    if (oldRevMode == 1) blk.process (0.0f, predelaySamp, ol, orr); else rev.process (0.0f, predelaySamp, ol, orr);
+                    rl += ol * oldRevFade * oldRevComp; rr += orr * oldRevFade * oldRevComp;
+                    oldRevFade *= oldRevCoef;
+                    if (oldRevFade < 1.0e-4f) { oldRevFade = 0.0f; if (oldRevMode == 1) blk.clear(); else rev.clear(); }
+                }
                 rl = wetAir.process (wetMud.process (wetBump.process (wetLp.process (wetHp.process (rl, 0), 0), 0), 0), 0);
                 rr = wetAir.process (wetMud.process (wetBump.process (wetLp.process (wetHp.process (rr, 1), 1), 1), 1), 1);
                 float m = 0.5f * (rl + rr), s = revSB.process (0.5f * (rl - rr) * (p.reverbMode == 1 ? p.blackWidth * p.width / 0.775f : p.width));
