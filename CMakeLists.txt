@@ -17,7 +17,7 @@ else()
 endif()
 
 juce_add_plugin(SunoChain
-    COMPANY_NAME "PM Audio"
+    COMPANY_NAME "Pouria Motabean"
     PLUGIN_MANUFACTURER_CODE Pmau
     PLUGIN_CODE Snch
     FORMATS VST3
