@@ -7,14 +7,13 @@ Current version: **v2.1.0** (VOWEL EQ). v2.0.4: female presets, SIBILANT GUARD. 
 2. **More factory presets**: Pouria builds presets (including female-vocal presets) and they are embedded in
    `Source/FactoryPresets.h` next to the current eight.
 3. ~~Windows installer~~ done in v2.0.3 (Releases page).
-4. **v2.1 – LEARN SUNO**: build a preset inside the plugin from a Suno vocal.
-   - Where: a LEARN SUNO button next to LEARN, or drag a Suno stem (from Windows or Cubase) onto the plugin.
-   - How: analysis on a background thread (playback never stops), progress bar, a summary of what was learned with a
-     confidence value per section and a warning for dirty stems (instruments, backing vocals); the result is saved
-     as a new preset next to the others and applied at once.
-   - Input: a clean solo Suno vocal stem (no instruments).
-   - Light version first: Match EQ, S/Z, loudness, compression (reverb and width stay from the chosen preset).
-     Full version later: reverb, width, dirty-stem cleaning with a colored waveform (see section 4).
+4. ~~LEARN SUNO inside the plugin~~ dropped (Oct 23, 2026): the Python analyzer already gives the same result;
+   Pouria builds the preset bank step by step (with Claude) and does the rest with his own edits.
+5. **Next, one at a time** (each: build, measure with the real plugin code, A/B files, Pouria's ear, then release),
+   and every preset in the bank must keep working with them:
+   1. Female **Dreamy** and **Velvet** presets (same method as Suno Female, from the Suno female stems).
+   2. **Width envelope**: the wide layer opens and closes with each syllable like Suno.
+   3. **Syllable compression**: syllables more even, like Suno.
 
 ## 2. Open issues (must fix)
 - ~~**EXACT EQ by ear**: "a little sharper"~~ measured and addressed in v2.1.0 (VOWEL EQ; waiting for Pouria's ear).
