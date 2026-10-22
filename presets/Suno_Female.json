@@ -64,7 +64,8 @@
   "max_boost_db": 12.0,
   "max_cut_db": 24.0,
   "max_boost_high_db": 15.0,
-  "solver": "exact"
+  "solver": "exact",
+  "smooth": true
  },
  "dynamics": {
   "target_crest_db": 8.56,

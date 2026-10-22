@@ -202,6 +202,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     // v2.0.4: SIBILANT GUARD (pulls back only sibilants far louder than the singer's usual ones). On for new
     // sessions and the factory presets; off for sessions / presets saved before v2.0.4 (their sound).
     p.push_back (std::make_unique<APB> (juce::ParameterID { "sibGuard", 11 }, "Sibilant Guard", true));
+    // v2.1: SMOOTH (evens out moments where the voice gets edgy / rings). On for new sessions and the factory
+    // presets; off for sessions / presets saved before v2.1 (their sound).
+    p.push_back (std::make_unique<APB> (juce::ParameterID { "smooth", 12 }, "Smooth", true));
     return { p.begin(), p.end() };
 }
 
@@ -242,7 +245,7 @@ void SunoChainProcessor::installFactoryPresets()
         juce::var onDisk, current;
         if (juce::JSON::parse (f.loadFileAsString(), onDisk).failed() || juce::JSON::parse (text, current).failed()) continue;
         if (! onDisk.isObject() || ! current.isObject()) continue;
-        static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" } };
+        static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" }, { "eq", "smooth" } };
         bool missing = false;
         for (auto& a : added)
         {
@@ -325,6 +328,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.breathDb = 0.2f * v ("breath");
     p.eqExact = v ("eqExact") > 0.5f;
     p.sibGuard = v ("sibGuard") > 0.5f;
+    p.smooth = v ("smooth") > 0.5f;
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -482,7 +486,8 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
         set ("breath", num (json, "user.breath", 0.0));
         // v2.0.2: presets saved before the EXACT solver keep the LEGACY one (their sound)
         set ("eqExact", json["eq"]["solver"].toString() == "exact" ? 1.0 : 0.0);
-        set ("sibGuard", num (json, "deesser.guard", 0.0));   // v2.0.4: older presets without it keep their sound
+        set ("sibGuard", num (json, "deesser.guard", 0.0));
+        set ("smooth", num (json, "eq.smooth", 0.0));   // v2.1: older presets without it keep their sound   // v2.0.4: older presets without it keep their sound
     dirty = true;
     return true;
 }
@@ -527,6 +532,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "eq.amount", v ("eqAmount") / 100.0);
     put (j, "eq.solver", v ("eqExact") > 0.5 ? "exact" : "legacy");
     put (j, "deesser.guard", v ("sibGuard") > 0.5);
+    put (j, "eq.smooth", v ("smooth") > 0.5);
     put (j, "saturation.drive_db", v ("satDrive"));
     put (j, "saturation.mix", v ("satMix") / 100.0);
     put (j, "reverb.on", v ("revOn") > 0.5);
@@ -829,7 +835,7 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             // BREATH arrived in v1.15.1 with a 40 % default: an older session had no breath control at all
             // the EXACT EQ solver arrived in v2.0.2: an older session keeps the LEGACY one (its sound)
             const auto pid = r->getParameterID();
-            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
+            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard" || pid == "smooth") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
             juce::ValueTree c ("PARAM"); c.setProperty ("id", r->getParameterID(), nullptr); c.setProperty ("value", legacy, nullptr);
             state.appendChild (c, nullptr);
             continue;

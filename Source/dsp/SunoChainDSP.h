@@ -118,6 +118,7 @@ struct Params
     // v1.14 reverb mode: 0 = SUNO (fitted to the Suno stems), 1 = BLACK (long, dense, wide, blooming; see BlackReverb)
     int reverbMode = 0;
     bool reverbFreeze = false;
+    bool smooth = false;     // v2.1 SMOOTH (false = before v2.1)
     bool sibGuard = false;   // v2.0.4 SIBILANT GUARD (false = before v2.0.4)
     bool eqExact = false;    // v2.0.2: EXACT Match EQ / S/Z solver (false = LEGACY, the v1.x - v2.0.1 sound)
     float breathDb = 8.0f;   // v1.15.1 BREATH (v1.15.2 detector): cut on breaths between phrases (knob 0-100 % = 0-20 dB)   // v1.15 FREEZE: the tail holds forever, nothing new enters
@@ -149,6 +150,12 @@ struct Biquad
     void setNorm (double B0, double B1, double B2, double A0, double A1, double A2)
     { b0 = B0 / A0; b1 = B1 / A0; b2 = B2 / A0; a1 = A1 / A0; a2 = A2 / A0; }
     void setIdentity() { b0 = 1; b1 = b2 = a1 = a2 = 0; }
+    void setBandPass (double fs, double f, double q)   // v2.1: constant 0 dB peak gain
+    {
+        f = std::min (f, fs * 0.45);
+        double w = 2 * kPi * f / fs, al = std::sin (w) / (2 * q), c = std::cos (w);
+        setNorm (al, 0.0, -al, 1 + al, -2 * c, 1 - al);
+    }
     void setPeak (double fs, double f, double q, double db)
     {
         f = std::min (f, fs * 0.45);
@@ -1411,6 +1418,74 @@ struct SibGuard
 };
 
 //==============================================================================
+// v2.1 SMOOTH. Measured on voiced frames (sung vowels, no sibilants): the presence region 2-6 kHz relative to the
+// voice body (0.5-2 kHz) varies far more in a raw recording than in Suno's vocals (97th percentile minus median:
+// Suno 12-14 dB, Pouria's female take after the chain 23 dB) - short moments where the voice gets nasal / edgy /
+// rings. SMOOTH learns the singer's typical presence balance per band (running median, voiced frames only) and
+// compresses only the moments far above it (more than 6 dB, ratio 3:1, max 9 dB), with three dynamic peaking
+// filters (2.5 / 3.6 / 5.2 kHz). The average tone is not changed; sibilants are left to the S/Z Match and the
+// SIBILANT GUARD. At 0 dB the filters are exact identities.
+struct Smooth
+{
+    static constexpr int kB = 3;
+    static constexpr float kMarginDb = 6.0f, kRatio = 3.0f, kMaxDb = 9.0f;
+    std::array<double, kB> fc { 2500.0, 3600.0, 5200.0 };
+    std::array<Biquad, kB> d1, d2, peak; Biquad bodyHp, bodyLp; double fs = 48000;
+    std::array<float, kB> e {}, med {}, tDb {}, cut {}, setDb {}; float eBody = 0, envC = 0, step = 0, atk = 0, rel = 0;
+    int count = 0, ticks = 0; bool init = false;
+    void prepare (double sampleRate)
+    {
+        fs = sampleRate;
+        for (int b = 0; b < kB; ++b)
+        {
+            d1[(size_t) b].reset(); d2[(size_t) b].reset(); peak[(size_t) b].reset();
+            d1[(size_t) b].setBandPass (fs, fc[(size_t) b], 2.0); d2[(size_t) b].setBandPass (fs, fc[(size_t) b], 2.0);
+            peak[(size_t) b].setPeak (fs, fc[(size_t) b], 1.6, 0.0);
+        }
+        bodyHp.reset(); bodyLp.reset(); bodyHp.setHPF (fs, 500.0); bodyLp.setLPF (fs, 2000.0);
+        e.fill (0); med.fill (0); tDb.fill (0); cut.fill (0); setDb.fill (0); eBody = 0; count = 0; ticks = 0; init = false;
+        envC = msToCoef (10.0f, fs); atk = msToCoef (3.0f, fs); rel = msToCoef (60.0f, fs);
+        step = (float) (8.0 * 8.0 / fs);   // the median follows at most 8 dB/s
+    }
+    // vowel: a sung vowel right now (no consonant, no pause); sib: S/Z detector weight
+    inline void process (float& l, float& r, bool vowel, float sib, float amount)
+    {
+        const float m = 0.5f * (l + r);
+        const float bd = bodyLp.process (bodyHp.process (m, 0), 0);
+        eBody = envC * eBody + (1 - envC) * bd * bd;
+        for (int b = 0; b < kB; ++b)
+        {
+            const float y = d2[(size_t) b].process (d1[(size_t) b].process (m, 0), 0);
+            e[(size_t) b] = envC * e[(size_t) b] + (1 - envC) * y * y;
+        }
+        if ((++count & 7) == 0)
+        {
+            const bool use = vowel && sib < 0.3f && eBody > 1e-9f;
+            for (int b = 0; b < kB; ++b)
+            {
+                tDb[(size_t) b] = 0.0f;
+                if (! use) continue;
+                const float rb = 10 * std::log10 ((e[(size_t) b] + 1e-14f) / eBody);
+                if (! init) med[(size_t) b] = rb;
+                else med[(size_t) b] += rb > med[(size_t) b] ? step : -step;
+                if (ticks > (int) (fs / 8.0))   // one second of singing before acting
+                    tDb[(size_t) b] = std::clamp ((rb - med[(size_t) b] - kMarginDb) * (1.0f - 1.0f / kRatio), 0.0f, kMaxDb) * amount;
+            }
+            if (use) { init = true; ++ticks; }
+        }
+        for (int b = 0; b < kB; ++b)
+        {
+            auto& c = cut[(size_t) b]; const float t = tDb[(size_t) b];
+            c = t > c ? atk * c + (1 - atk) * t : rel * c + (1 - rel) * t;
+            if (c < 0.001f) c = 0.0f;
+            if (std::abs (c - setDb[(size_t) b]) > 0.05f || (c == 0.0f && setDb[(size_t) b] != 0.0f))
+            { setDb[(size_t) b] = c; peak[(size_t) b].setPeak (fs, fc[(size_t) b], 1.6, -c); }
+            l = peak[(size_t) b].process (l, 0); r = peak[(size_t) b].process (r, 1);
+        }
+    }
+};
+
+//==============================================================================
 // Loudness meter (v1.8, Match Loudness): ITU-R BS.1770 integrated loudness of the plugin's output
 // (K-weighting, 400 ms blocks with 75 % overlap, -70 LUFS absolute and -10 LU relative gates).
 // The audio thread stores 100 ms mean squares while active; the message thread integrates them.
@@ -1697,6 +1772,7 @@ public:
     Biquad voiceLp1, voiceLp2, voiceHp1, voiceHp2; float vAll = 0, vLow = 0, vHigh = 0, vCoef = 0;   // voicing gate (v1.7)
     DeEsser deess;
     SibCeiling sibCeil; DelayLine laRaw; SibGuard sibGuard;   // v2.0.4
+    Smooth smooth;   // v2.1
     Crisp crisp; Biquad airShelf; float airShelfDb = 0; ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
     StereoDelay delay;
     FDNReverb rev;
@@ -1741,7 +1817,7 @@ public:
         onHp1.reset(); onHp2.reset(); onHp1.setHPF (fs, 4500.0); onHp2.setHPF (fs, 4500.0); onFast = onSlow = 0; onG = 1;
         onFastC = msToCoef (3.0f, fs); onSlowC = msToCoef (60.0f, fs);
         rideEnv = 0; rideRef = -200; rideG = 0; rideEnvC = msToCoef (50.0f, fs); rideRefC = msToCoef (4000.0f, fs);
-        laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs); sibGuard.prepare (fs);
+        laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs); sibGuard.prepare (fs); smooth.prepare (fs);
         excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset();
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
         voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs); blk.prepare (fs); breath.prepare (fs);
@@ -2013,6 +2089,8 @@ public:
             if (p.excAmount > 0.001f && p.amount > 0)
                 crisp.process (l, r, p.excAmount * p.crispDepth * std::clamp (p.amount, 0.0f, 1.0f), pause || consonant || deess.k > 0.1f, deess.k);   // consonants pass untouched
             if (std::abs (airShelfDb) > 0.01f) { l = airShelf.process (l, 0); r = airShelf.process (r, 1); }
+            if (p.smooth)   // v2.1: before the guard, so the guard measures the smoothed voice
+                smooth.process (l, r, ! consonant && ! pause, deess.k, std::clamp (p.amount, 0.0f, 1.0f));
             if (p.sibGuard)   // v2.0.4, after everything that lifts the top (EQ, S/Z Match, crisp, AIR)
             {
                 sibGuard.process (l, r, detNowL, detNowR, deess.k, std::clamp (p.deessAmount, 0.0f, 1.0f) * std::clamp (p.amount, 0.0f, 1.0f));
