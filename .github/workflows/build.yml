@@ -49,12 +49,18 @@ jobs:
       - name: Build the Windows installer
         shell: pwsh
         run: |
+          # errors are also written as annotations (::error::), readable from the run summary / API
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
-          if (-not (Test-Path $iscc)) { throw "Inno Setup not found" }
+          if (-not (Test-Path $iscc)) { $c = choco install innosetup -y --no-progress 2>&1; if (-not (Test-Path $iscc)) { $c | Select-Object -Last 15 | ForEach-Object { echo "::error::choco: $_" } } }
+          if (-not (Test-Path $iscc)) {
+            $found = Get-ChildItem -Recurse "${env:ProgramFiles(x86)}", "$env:ProgramFiles" -Filter ISCC.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $iscc = $found.FullName } else { echo "::error::Inno Setup (ISCC.exe) not found"; exit 1 }
+          }
           $out = Join-Path $PWD "build\installer"
-          & $iscc "/DAppVersion=$env:SC_VERSION" "/DBundleDir=$env:VST3_PATH" "/DOutDir=$out" installer\SunoChain.iss
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          $log = & $iscc "/DAppVersion=$env:SC_VERSION" "/DBundleDir=$env:VST3_PATH" "/DOutDir=$out" installer\SunoChain.iss 2>&1
+          $code = $LASTEXITCODE
+          $log | ForEach-Object { echo $_ }
+          if ($code -ne 0) { $log | Select-Object -Last 20 | ForEach-Object { echo "::error::ISCC: $_" }; exit 1 }
           $setup = Join-Path $out "SunoChain_Setup_v$env:SC_VERSION.exe"
           if (-not (Test-Path $setup)) { throw "installer not created" }
           echo "SETUP_PATH=$setup" >> $env:GITHUB_ENV
