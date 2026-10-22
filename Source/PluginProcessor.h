@@ -87,6 +87,7 @@ public:
     struct Meters { float gr1, gr2, duck, in, out, width; double bpm; float delayMs; uint32_t blocks; float deess;
                     std::array<float, 6> widthBands; };   // output side-mid per band: singing low/mid/high, pauses low/mid/high
     Meters getMeters() const;
+    void pumpMeters();   // v2.0.1: runs the WIDTH analysis (message thread, editor timer)
 
 private:
     void parameterChanged (const juce::String&, float) override { dirty = true; }
@@ -95,8 +96,19 @@ private:
 
     sc::Chain chain;
     std::atomic<bool> dirty { true };
+    // v2.0.1: while a preset or session is being applied (several parameters, one after the other) the audio thread
+    // keeps the previous settings, so it never runs a mix of old and new values
+    std::atomic<int> paramBatch { 0 };
+    struct BatchScope
+    {
+        explicit BatchScope (SunoChainProcessor& p) : o (p) { ++o.paramBatch; }
+        ~BatchScope() { o.dirty = true; --o.paramBatch; }
+        SunoChainProcessor& o;
+    };
+    static constexpr int kStateVersion = 2;   // EXTRA.stateVersion (v2.0.1); absent = v2.0 or older
     std::atomic<double> hostBpm { 120.0 };
     mutable juce::SpinLock presetLock;
+    juce::SpinLock meterLock;          // prepareToPlay vs pumpMeters
     sc::Params hidden;                 // preset/learned values that are not host parameters
     std::array<float, sc::kNumBands> learnAppliedCorr {};   // EQ correction active while Learn listened
     juce::String presetName { "No preset (load a .json)" };

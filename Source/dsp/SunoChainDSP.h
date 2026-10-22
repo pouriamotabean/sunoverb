@@ -1,4 +1,6 @@
 #pragma once
+#include <thread>
+#include <chrono>
 // Suno Chain - DSP core (no JUCE dependency, so it can be rendered/tested offline).
 // Chain: gain staging -> Match EQ -> Comp 1 -> Comp 2 -> De-esser -> Saturation  (= dry)
 //        dry -> [Delay] + [Predelay -> Early reflections + 8-line FDN reverb -> wet EQ -> width]
@@ -116,7 +118,8 @@ struct Params
     // v1.14 reverb mode: 0 = SUNO (fitted to the Suno stems), 1 = BLACK (long, dense, wide, blooming; see BlackReverb)
     int reverbMode = 0;
     bool reverbFreeze = false;
-    float breathDb = 8.0f;   // v1.15.1 BREATH: cut on breaths between phrases (knob 0-100 % = 0-20 dB)   // v1.15 FREEZE: the tail holds forever, nothing new enters
+    bool eqExact = false;    // v2.0.2: EXACT Match EQ / S/Z solver (false = LEGACY, the v1.x - v2.0.1 sound)
+    float breathDb = 8.0f;   // v1.15.1 BREATH (v1.15.2 detector): cut on breaths between phrases (knob 0-100 % = 0-20 dB)   // v1.15 FREEZE: the tail holds forever, nothing new enters
     float blackRtMul = 1.8f, blackHighMul = 0.6f, blackXoverHz = 4500.0f, blackWidth = 1.2f, blackLevelDb = 4.0f;
     std::array<float, 3> blackBandDb { 0.0f, -1.0f, -4.0f };   // tail width per band (Blackhole: ~0 / -1 / -4 dB side-minus-mid)
 
@@ -186,6 +189,110 @@ struct Biquad
 };
 
 //==============================================================================
+// v2.0.2: EXACT solver for the 26-band peaking cascade (from Pouria's EQ solver report). The LEGACY iteration
+// below (g += 0.75 * error, 12 times) overshoots where neighbouring bands move together (the overlap makes the
+// loop gain ~2.25 > 2): for large / tilted corrections it misses the curve by several dB. This solves
+//     min |M g - desired|^2 + 0.02 |g|^2      (M[b][k] = dB band k at +1 dB adds at the centre of band b)
+// then corrects 6 times against the real (slightly non-linear) response. Same clamps (-30 / +18 dB), bands above
+// 0.45 fs skipped. Everything that depends only on the sample rate (M, the regularised inverse, the evaluation
+// points) is computed once per rate, so a solve costs about as little as the legacy one (it runs on the audio
+// thread when Amount / Match EQ / Low Boost / Air are automated). Fixed-size arrays only: no allocation.
+struct ExactEqSolver
+{
+    static constexpr double kQ = 2.2, kLambda = 0.02;
+    double fs = 0; int nb = 0;
+    std::array<std::array<double, kNumBands>, kNumBands> P {};   // (M^T M + lambda I)^-1 M^T  (nb x nb)
+    std::array<double, kNumBands> c1 {}, s1 {}, c2 {}, s2 {};    // e^{-jw}, e^{-2jw} at the band centres
+
+    void prepare (double sampleRate)
+    {
+        if (sampleRate == fs) return;
+        fs = sampleRate;
+        const auto& fc = bandCenters();
+        nb = 0; while (nb < kNumBands && fc[(size_t) nb] <= fs * 0.45) ++nb;
+        for (int b = 0; b < kNumBands; ++b)
+        {
+            const double w = 2 * kPi * fc[(size_t) b] / fs;
+            c1[(size_t) b] = std::cos (w); s1[(size_t) b] = -std::sin (w); c2[(size_t) b] = std::cos (2 * w); s2[(size_t) b] = -std::sin (2 * w);
+        }
+        std::array<std::array<double, kNumBands>, kNumBands> M {};
+        for (int k = 0; k < nb; ++k)
+        {
+            Biquad t; t.setPeak (fs, fc[(size_t) k], kQ, 1.0);
+            for (int b = 0; b < nb; ++b) M[(size_t) b][(size_t) k] = t.magDb (fs, fc[(size_t) b]);
+        }
+        // A = M^T M + lambda I, inverted by Gauss-Jordan with partial pivoting on [A | I]
+        std::array<std::array<double, 2 * kNumBands>, kNumBands> A {};
+        for (int i = 0; i < nb; ++i)
+        {
+            for (int j = 0; j < nb; ++j)
+            {
+                double v = 0; for (int b = 0; b < nb; ++b) v += M[(size_t) b][(size_t) i] * M[(size_t) b][(size_t) j];
+                A[(size_t) i][(size_t) j] = v + (i == j ? kLambda : 0.0);
+            }
+            A[(size_t) i][(size_t) (nb + i)] = 1.0;
+        }
+        for (int c = 0; c < nb; ++c)
+        {
+            int piv = c;
+            for (int r = c + 1; r < nb; ++r) if (std::abs (A[(size_t) r][(size_t) c]) > std::abs (A[(size_t) piv][(size_t) c])) piv = r;
+            std::swap (A[(size_t) c], A[(size_t) piv]);
+            const double d = A[(size_t) c][(size_t) c];
+            for (int k = 0; k < 2 * nb; ++k) A[(size_t) c][(size_t) k] /= d;   // A is symmetric positive definite: d > 0
+            for (int r = 0; r < nb; ++r)
+                if (r != c)
+                {
+                    const double f = A[(size_t) r][(size_t) c];
+                    if (f != 0.0) for (int k = 0; k < 2 * nb; ++k) A[(size_t) r][(size_t) k] -= f * A[(size_t) c][(size_t) k];
+                }
+        }
+        for (auto& row : P) row.fill (0.0);
+        for (int i = 0; i < nb; ++i)
+            for (int b = 0; b < nb; ++b)
+            {
+                double v = 0; for (int j = 0; j < nb; ++j) v += A[(size_t) i][(size_t) (nb + j)] * M[(size_t) b][(size_t) j];
+                P[(size_t) i][(size_t) b] = v;
+            }
+    }
+    std::array<float, kNumBands> solve (const std::array<float, kNumBands>& desired, double sampleRate)
+    {
+        prepare (sampleRate);   // no-op unless the rate changed
+        const auto& fc = bandCenters();
+        std::array<float, kNumBands> g {};
+        std::array<double, kNumBands> y {};
+        auto lsq = [&] (const std::array<double, kNumBands>& v, std::array<double, kNumBands>& x)
+        {
+            for (int i = 0; i < nb; ++i) { double s = 0; for (int b = 0; b < nb; ++b) s += P[(size_t) i][(size_t) b] * v[(size_t) b]; x[(size_t) i] = s; }
+        };
+        for (int b = 0; b < nb; ++b) y[(size_t) b] = desired[(size_t) b];
+        std::array<double, kNumBands> x {};
+        lsq (y, x);
+        for (int k = 0; k < nb; ++k) g[(size_t) k] = (float) std::clamp (x[(size_t) k], -30.0, 18.0);
+        std::array<Biquad, kNumBands> tmp;
+        for (int it = 0; it < 6; ++it)
+        {
+            for (int k = 0; k < nb; ++k) tmp[(size_t) k].setPeak (fs, fc[(size_t) k], kQ, g[(size_t) k]);
+            std::array<double, kNumBands> err {};
+            for (int b = 0; b < nb; ++b)
+            {
+                double pr = 1;
+                for (int k = 0; k < nb; ++k)
+                {
+                    const auto& t = tmp[(size_t) k];
+                    const double nr = t.b0 + t.b1 * c1[(size_t) b] + t.b2 * c2[(size_t) b], ni = t.b1 * s1[(size_t) b] + t.b2 * s2[(size_t) b];
+                    const double dr = 1 + t.a1 * c1[(size_t) b] + t.a2 * c2[(size_t) b], di = t.a1 * s1[(size_t) b] + t.a2 * s2[(size_t) b];
+                    pr *= std::max (1e-24, (nr * nr + ni * ni) / (dr * dr + di * di));
+                }
+                err[(size_t) b] = desired[(size_t) b] - 10 * std::log10 (pr);
+            }
+            lsq (err, x);
+            for (int k = 0; k < nb; ++k) g[(size_t) k] = (float) std::clamp (g[(size_t) k] + 0.8 * x[(size_t) k], -30.0, 18.0);
+        }
+        return g;
+    }
+};
+
+//==============================================================================
 // 26-band graphic EQ with iterative gain solving, so the cascade really hits the requested curve.
 struct MatchEQ
 {
@@ -194,22 +301,42 @@ struct MatchEQ
     std::array<float, kNumBands> gainsDb {};
     double fs = 48000;
 
-    void prepare (double sampleRate) { fs = sampleRate; for (auto& b : bands) { b.reset(); b.setIdentity(); } }
+    ExactEqSolver exact;
+    void prepare (double sampleRate) { fs = sampleRate; for (auto& b : bands) { b.reset(); b.setIdentity(); } exact.prepare (fs); }
+    // v2.0.2: EXACT (default for new sessions and the factory presets) or LEGACY (sessions / presets saved before)
+    std::array<float, kNumBands> solveFor (const std::array<float, kNumBands>& desired, bool exactMode)
+    { return exactMode ? exact.solve (desired, fs) : solve (desired, fs); }
 
-    // desired: correction in dB at each band centre
+    // LEGACY solver (v1.x - v2.0.1). desired: correction in dB at each band centre
     static std::array<float, kNumBands> solve (const std::array<float, kNumBands>& desired, double fs)
     {
+        // v2.0.1: same iteration as before, ~7x faster (it runs on the audio thread whenever a knob that moves the
+        // EQ is automated): |H|^2 in real arithmetic at precomputed points, one log per band instead of one per
+        // filter. Same result within 5e-7 dB (float rounding of the gains), checked against the old solver.
         std::array<float, kNumBands> g = desired;
         std::array<Biquad, kNumBands> tmp;
         const auto& fc = bandCenters();
+        std::array<double, kNumBands> c1 {}, s1 {}, c2 {}, s2 {};
+        for (int b = 0; b < kNumBands; ++b)
+        {
+            const double w = 2 * kPi * fc[b] / fs;
+            c1[b] = std::cos (w); s1[b] = -std::sin (w); c2[b] = std::cos (2 * w); s2[b] = -std::sin (2 * w);
+        }
         for (int it = 0; it < 12; ++it)
         {
             for (int k = 0; k < kNumBands; ++k) tmp[k].setPeak (fs, fc[k], kQ, g[k]);
             for (int b = 0; b < kNumBands; ++b)
             {
                 if (fc[b] > fs * 0.45) continue;
-                double r = 0;
-                for (int k = 0; k < kNumBands; ++k) r += tmp[k].magDb (fs, fc[b]);
+                double pr = 1;
+                for (int k = 0; k < kNumBands; ++k)
+                {
+                    const auto& t = tmp[k];
+                    const double nr = t.b0 + t.b1 * c1[b] + t.b2 * c2[b], ni = t.b1 * s1[b] + t.b2 * s2[b];
+                    const double dr = 1 + t.a1 * c1[b] + t.a2 * c2[b], di = t.a1 * s1[b] + t.a2 * s2[b];
+                    pr *= std::max (1e-24, (nr * nr + ni * ni) / (dr * dr + di * di));
+                }
+                const double r = 10 * std::log10 (pr);
                 g[b] = (float) std::clamp (g[b] + 0.75 * (desired[b] - r), -30.0, 18.0);
             }
         }
@@ -442,12 +569,14 @@ struct DeEsser
         for (auto& u : f) { u.reset(); u.setIdentity(); }
         envCoef = msToCoef (5.0f, fs); atk = msToCoef (1.5f, fs); rel = msToCoef (30.0f, fs);
         k = kTarget = 0; kApplied = -1;
+        ePreHf = ePreFull = 0; counter = 0; exact.prepare (fs);   // v2.0.1: a second prepare starts like the first
     }
     // delta (dB per band, all 26; only >= 2 kHz used) at amount 1; solved for the overlapping cascade
-    void setDelta (std::array<float, kNumBands> delta, double fs)
+    ExactEqSolver exact;   // v2.0.2
+    void setDelta (std::array<float, kNumBands> delta, double fs, bool exactMode = false)
     {
         for (int i = 0; i < kNumBands; ++i) if (bandCenters()[(size_t) i] < 2000.0f) delta[(size_t) i] = 0.0f;
-        auto g = MatchEQ::solve (delta, fs);
+        auto g = exactMode ? exact.solve (delta, fs) : MatchEQ::solve (delta, fs);
         maxCut = 0;
         for (int i = 0; i < kN; ++i)
         {
@@ -586,6 +715,8 @@ struct MicroWidth
     {
         fs = s; bufI.allocate ((int) (0.03 * fs)); bufQ.allocate ((int) (0.03 * fs)); hp.reset(); lp.reset(); tilt.reset(); hil.reset();
         cF = msToCoef (5, fs); cS = msToCoef (80, fs); gCoefUp = msToCoef (60, fs); gCoefDn = msToCoef (25, fs);
+        // v2.0.1: running state back to the constructor values (a second prepare starts like the first)
+        phA = 0; phB = 0.31; envF = envS = 0; silentFor = sinceOnset = phraseAge = 1e9f; gEnv = 1; pauseLen = 0;
     }
     void set (const Params& p, float amt)
     {
@@ -638,7 +769,7 @@ struct SideBands
 {
     Biquad lpA, lpB, hpA, hpB, lp2A, lp2B, hp2A, hp2B, ap; double fs = 48000;
     std::array<float, 3> g { 1, 1, 1 }, gT { 1, 1, 1 }; float gc = 0, topMul = 1.0f;   // topMul: dynamic top-band gain (v1.13.1 onset envelope)
-    void prepare (double s) { fs = s; for (auto* b : { &lpA, &lpB, &hpA, &hpB, &lp2A, &lp2B, &hp2A, &hp2B, &ap }) b->reset(); gc = msToCoef (20.0f, fs); }
+    void prepare (double s) { fs = s; for (auto* b : { &lpA, &lpB, &hpA, &hpB, &lp2A, &lp2B, &hp2A, &hp2B, &ap }) b->reset(); gc = msToCoef (20.0f, fs); g = { 1, 1, 1 }; topMul = 1.0f; }   // v2.0.1: gains restart like a fresh instance
     void set (float fLow, float fHigh, const std::array<float, 3>& db, float scale = 1.0f)
     {
         fLow = std::clamp (fLow, 40.0f, 2000.0f); fHigh = std::clamp (fHigh, fLow * 2.0f, (float) (fs * 0.4));
@@ -873,7 +1004,7 @@ struct BlackReverb
 };
 
 //==============================================================================
-// v1.15.1 BREATH: breaths between phrases are turned down. The chain lifts everything quiet (compressor, rider,
+// v1.15.1 BREATH (v1.15.2 detector): breaths between phrases are turned down. The chain lifts everything quiet (compressor, rider,
 // the Match EQ's high lift on a dark voice), so an audible breath in the dry vocal came out loud and bright.
 // Detected on the raw input, 20 ms ahead (the plugin's lookahead), so the cut is in place when the breath plays:
 //  - unvoiced: little energy below 1 kHz (vowels and voiced consonants have most of theirs there);
@@ -886,13 +1017,15 @@ struct BreathControl
     float eF = 0, eL = 0, eH = 0, envC = 0, refDb = -200, refC = 0, g = 1, atk = 0, rel = 0, target = 1;
     int counter = 0, sinceVoiced = 1 << 30, breathFor = 0;
     float depthDb = 8.0f;   // cut at the BREATH knob (0..20 dB)
+    float relFast = 0; bool fastUp = true;
+    float lastF = -200, lastLow = 0, lastHf = 0, peakFall = 0;   // last analysis (tests / meter)
     void prepare (double s)
     {
         fs = s; lp1.setLPF (fs, 1000.0); lp2.setLPF (fs, 1000.0); hp1.setHPF (fs, 4000.0); hp2.setHPF (fs, 4000.0);
         for (auto* b : { &lp1, &lp2, &hp1, &hp2 }) b->reset();
-        eF = eL = eH = 0; refDb = -200; g = 1; target = 1; counter = 0; sinceVoiced = 1 << 30; breathFor = 0;
-        envC = msToCoef (8.0f, fs); refC = (float) std::exp (-16.0 / (2.0 * fs));
-        atk = msToCoef (15.0f, fs); rel = msToCoef (40.0f, fs);
+        eF = eL = eH = 0; refDb = -200; g = 1; target = 1; counter = 0; sinceVoiced = 1 << 30; breathFor = 0; lastF = -200; lastLow = lastHf = 0;
+        envC = msToCoef (8.0f, fs); refC = (float) std::exp (-16.0 / (2.0 * fs)); peakFall = (float) (3.0 * 16.0 / fs);
+        atk = msToCoef (15.0f, fs); rel = msToCoef (40.0f, fs); relFast = msToCoef (5.0f, fs); fastUp = true;
     }
     // m: raw mono input (before the EQ), un-delayed
     inline void detect (float m)
@@ -902,19 +1035,30 @@ struct BreathControl
         if ((++counter & 15) != 0) return;
         const float fDb = 10 * std::log10 (eF + 1e-14f), lowShare = 10 * std::log10 ((eL + 1e-15f) / (eF + 1e-14f)), hfShare = 10 * std::log10 ((eH + 1e-15f) / (eF + 1e-14f));
         const bool voiced = lowShare > -4.0f && fDb > -70.0f && (refDb < -150.0f || fDb > refDb - 30.0f);
+        lastF = fDb; lastLow = lowShare; lastHf = hfShare;
         if (voiced)
         {
             sinceVoiced = 0;
-            refDb = refDb < -150.0f ? fDb : refC * refDb + (1 - refC) * fDb;   // your sung level (~2 s average)
+            refDb = std::max (fDb, refDb);   // your sung peak level (falls 3 dB/s between notes, below)
         }
         else if (sinceVoiced < (1 << 30)) sinceVoiced += 16;
-        // breath noise keeps some energy below 1 kHz (-15..-5 dB); an s / sh / ch has almost none (< -15 dB)
-        const bool breathy = ! voiced && refDb > -150.0f && lowShare < -5.0f && lowShare > -15.0f && hfShare < -2.0f
-                             && fDb < refDb - 16.0f && fDb > refDb - 50.0f && sinceVoiced > (int) (0.12 * fs);
-        breathFor = breathy ? breathFor + 16 : 0;
-        target = breathFor >= (int) (0.04 * fs) ? dbToGain (-depthDb) : 1.0f;
+        if (refDb > -150.0f) refDb -= peakFall;
+        // v1.15.2, fitted on Pouria's real breath: inhale 11-16 dB under 1 kHz (vowels ~0), 20-30 dB under the sung peak,
+        // starting ~60 ms after the phrase. An s / sh is 9-16 dB under the peak: the level gate (18 dB) and the length
+        // (60 ms+) keep them out.
+        // once a breath is running the level gate is 4 dB looser (no flicker on its louder middle)
+        const float gate = breathFor >= (int) (0.06 * fs) ? 14.0f : 18.0f;
+        const bool breathy = ! voiced && refDb > -150.0f && lowShare < -5.0f && lowShare > -24.0f && hfShare < -1.0f
+                             && fDb < refDb - gate && fDb > refDb - 60.0f && sinceVoiced > (int) (0.04 * fs);
+        // a short miss (or a gap of silence) does not restart it; the voice coming back, anything louder than a
+        // breath or an s/sh hiss ends it at once, so the next word's first consonant is never cut
+        if (voiced || (! breathy && (fDb > refDb - 12.0f || hfShare >= -1.0f) && fDb > refDb - 60.0f)) breathFor = 0;
+        else breathFor = breathy ? breathFor + 16 : std::max (0, breathFor - 48);
+        target = breathFor >= (int) (0.06 * fs) ? dbToGain (-depthDb) : 1.0f;
+        fastUp = breathFor == 0;
     }
-    inline float gain() { g = target < g ? atk * g + (1 - atk) * target : rel * g + (1 - rel) * target; return g; }
+    // the detector runs 20 ms ahead of the delayed audio: a 5 ms return when the voice is back reopens before the note
+    inline float gain() { g = target < g ? atk * g + (1 - atk) * target : (fastUp ? relFast : rel) * g + (1 - (fastUp ? relFast : rel)) * target; return g; }
 };
 
 //==============================================================================
@@ -1435,6 +1579,28 @@ struct WidthMeter
 };
 
 //==============================================================================
+// v2.0.1: single-producer / single-consumer sample FIFO (audio thread -> message thread). No locks, no allocation
+// after allocate(); when the reader does not keep up (editor closed) new samples are simply dropped.
+struct StereoFifo
+{
+    std::vector<float> buf; size_t cap = 0; std::atomic<size_t> w { 0 }, r { 0 };
+    void allocate (size_t frames) { buf.assign (frames * 2, 0.0f); cap = std::max<size_t> (1, frames); w = 0; r = 0; }
+    inline void push (float a, float b)
+    {
+        const size_t wi = w.load (std::memory_order_relaxed);
+        if (cap == 0 || buf.empty() || wi - r.load (std::memory_order_acquire) >= cap) return;
+        const size_t k = (wi % cap) * 2; buf[k] = a; buf[k + 1] = b;
+        w.store (wi + 1, std::memory_order_release);
+    }
+    template <class Fn> void drain (Fn&& fn)
+    {
+        size_t ri = r.load (std::memory_order_relaxed); const size_t wi = w.load (std::memory_order_acquire);
+        for (; ri < wi; ++ri) { const size_t k = (ri % cap) * 2; fn (buf[k], buf[k + 1]); }
+        r.store (ri, std::memory_order_release);
+    }
+};
+
+//==============================================================================
 class Chain
 {
 public:
@@ -1454,7 +1620,8 @@ public:
     MicroWidth widthLayer;
     SideBands revSB, layerSB, delaySB;
     Learner learner;
-    WidthMeter widthMeter;   // output width per band (WIDTH graph)
+    WidthMeter widthMeter;   // output width per band (WIDTH graph); v2.0.1: runs on the message thread (pumpMeters)
+    StereoFifo meterFifo;    // audio thread -> widthMeter
     LoudnessMeter loud;      // Match Loudness: output before the Output knob and the loudness gain
     float restoreGain = 1;
     Biquad wetHp, wetLp, wetBump, wetMud, wetAir;   // wetAir: the FDN tail is ~5 dB darker than Suno above 4 kHz   // v1.13 wetMud: the reverb was ~3 dB too full at 250 Hz-1 kHz vs Suno
@@ -1471,7 +1638,7 @@ public:
     float predelaySamp = 0; int lastRevMode = -1, oldRevMode = -1; float oldRevFade = 0.0f, oldRevCoef = 0.999f, oldRevComp = 1.0f, freezeAmt = 0.0f, freezeCoef = 0.999f;
     double fs = 48000;
     std::array<float, kNumBands> lastCorrection {}, lastSibDelta {};
-    bool sibValid = false;
+    bool sibValid = false, lastEqExact = false;
     float sibAlpha = 0; std::array<float, 2> sibLevelInfo { 0, 0 };   // analysis: share of the lift taken back; s level before / Suno
     float eqMakeup = 1.0f;
     bool eqValid = false;
@@ -1495,13 +1662,39 @@ public:
         voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs); blk.prepare (fs); breath.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
         revSB.prepare (fs); layerSB.prepare (fs); delaySB.prepare (fs);
-        widthMeter.prepare (fs, 8.0);
+        widthMeter.prepare (fs, 8.0); meterFifo.allocate ((size_t) fs);   // 1 s of headroom between editor timer ticks
         loud.prepare (fs);
         for (auto& m : mWidthBands) m = -100.0f;
         wetHp.reset(); wetLp.reset(); wetBump.reset(); wetMud.reset(); wetAir.reset();
+        // v2.0.1: every running state back to a fresh start (a second prepare used to keep a few envelopes and the
+        // reverb-switch fade, so the same session could render slightly differently after a stop / sample-rate change)
+        phraseRef = -100; rmsEnv = holdEnv = 0; trFast = trSlow = trGainDb = trSm = 0;
+        lastRevMode = oldRevMode = -1; oldRevFade = 0; oldRevComp = 1; freezeAmt = 0;
+        detL.clear(); detR.clear();
         setParams (p);
     }
     int getLatency() const { return lookahead; }
+    // v2.0.1: Learn / Match Loudness start and stop from the message thread with a handshake: the audio thread
+    // decides once per block whether it feeds them (inBlock + active, both sequentially consistent), and stop()
+    // waits until no block that might still be feeding them is running. So the analysis never reads data that is
+    // being written, and a restart never resets buffers under the audio thread (data race found by ThreadSanitizer).
+    std::atomic<bool> inBlock { false };
+    void waitAudioIdle() const
+    {
+        for (int i = 0; i < 400 && inBlock.load(); ++i) std::this_thread::sleep_for (std::chrono::microseconds (250));
+    }
+    void startLearn() { learner.active = false; waitAudioIdle(); learner.start(); }
+    void stopLearn()  { learner.stop(); waitAudioIdle(); }
+    void startLoud()  { loud.active = false; waitAudioIdle(); loud.start(); }
+    void stopLoud()   { loud.stop(); waitAudioIdle(); }
+    // v2.0.1: the WIDTH graph analysis (two large FFTs every ~10 ms) used to run inside the audio callback and made
+    // the heaviest callbacks ~5x the average. It now runs here, on the message thread (editor timer / tools).
+    void pumpMeters()
+    {
+        meterFifo.drain ([this] (float l, float r) { widthMeter.push (l, r); });
+        std::array<float, 6> wv {}; widthMeter.values (wv);
+        for (size_t k = 0; k < 6; ++k) mWidthBands[k] = wv[k];
+    }
     void reset() { rev.clear(); blk.clear(); delay.l.clear(); delay.r.clear(); laL.clear(); laR.clear(); laRaw.clear(); c1.reset(); c2.reset(); duckGr = duckEnv = 0; }
 
     void setParams (const Params& np)
@@ -1514,7 +1707,8 @@ public:
         restoreGain = dbToGain (-stage);
         outGain = dbToGain (-stage + p.outputDb + p.loudGainDb);   // v1.8: + Match Loudness gain (held)
         auto corr = computeCorrection (p);
-        if (corr != lastCorrection || ! eqValid) { eq.setGains (MatchEQ::solve (corr, fs)); lastCorrection = corr; eqValid = true; }
+        if (corr != lastCorrection || ! eqValid || p.eqExact != lastEqExact)
+        { eq.setGains (eq.solveFor (corr, p.eqExact)); lastCorrection = corr; eqValid = true; }
 
         const bool learned = p.sourceCrestDb > 0.0f;
         const float spreadIn = (learned && p.sourceSpreadDb > 0.0f) ? p.sourceSpreadDb : 8.0f;
@@ -1617,7 +1811,8 @@ public:
             }
             for (int b = 0; b < kNumBands; ++b) delta[(size_t) b] = b >= f0 ? -delta[(size_t) b] : 0.0f;
             sibAlpha = alpha;
-            if (delta != lastSibDelta || ! sibValid) { deess.setDelta (delta, fs); lastSibDelta = delta; sibValid = true; }
+            if (delta != lastSibDelta || ! sibValid || p.eqExact != lastEqExact) { deess.setDelta (delta, fs, p.eqExact); lastSibDelta = delta; sibValid = true; }
+            lastEqExact = p.eqExact;
         }
         deess.amount = 1.0f; deess.relDetect = p.deessRelDetect; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
         satDrive = dbToGain (p.satDriveDb); satMix = 0.0f;   // v1.11: the tanh saturation is replaced by the harmonic exciter
@@ -1666,6 +1861,8 @@ public:
         const float presenceFloor = -18.0f - 15.0f;
         const float dlyMs = currentDelayMs();
         float maxGr1 = 0, maxGr2 = 0, maxDuck = 0, pkIn = 0, pkOut = 0, wE = 0, dE = 0, maxDs = 0;
+        inBlock = true;
+        const bool learnOn = learner.active.load(), loudOn = loud.active.load();
         for (int i = 0; i < n; ++i)
         {
             float l = L[i], r = R ? R[i] : L[i];
@@ -1721,7 +1918,7 @@ public:
             rmsEnv = rmsCoef * rmsEnv + (1 - rmsCoef) * compMono * compMono * g1 * g1;
             const float g2 = c2.computeGain (std::sqrt (rmsEnv), consonant || pause);
             maxGr1 = std::max (maxGr1, vc.grDb() + std::max (0.0f, -rideG)); maxGr2 = std::max (maxGr2, c2.gr);   // GR meter shows the rider's cuts too
-            const float bg = breathOn ? breath.gain() : 1.0f;   // v1.15.1 BREATH
+            const float bg = breathOn ? breath.gain() : 1.0f;   // v1.15.1 BREATH (v1.15.2 detector)
             l = laOutL * rideGain * g1 * g2 * bg; r = laOutR * rideGain * g1 * g2 * bg;
             deess.apply (l, r);
             if (p.sibCeiling) sibCeil.process (laRaw.read (lookahead - 1), l, r, deess.k, ! consonant && ! pause, std::clamp (p.deessAmount, 0.0f, 2.0f));
@@ -1799,18 +1996,18 @@ public:
             if (p.listenMode == 1)      { l = wl * dg; r = wr * dg; }   // LISTEN WET: reverb + echo only, after the ducking
             else if (p.listenMode == 2) { l = ws; r = -ws; }            // LISTEN WIDTH: the width layer only (side)
             else { l += wl * dg + ws; r += wr * dg - ws; }
-            widthMeter.push (l, r);   // before the output gain: ratios only
-            loud.push (l * restoreGain, r * restoreGain);
+            meterFifo.push (l, r);   // before the output gain: ratios only (analysed in pumpMeters, off the audio thread)
+            if (loudOn) loud.push (l * restoreGain, r * restoreGain);
             L[i] = l * outGain;
             if (R) R[i] = r * outGain;
-            learner.push (rawMono, 0.5f * (l + r));
+            if (learnOn) learner.push (rawMono, 0.5f * (l + r));
             pkOut = std::max (pkOut, std::max (std::abs (L[i]), R ? std::abs (R[i]) : 0.0f));
         }
         mDelayMs = dlyMs; mDeess = maxDs;
-        { std::array<float, 6> wv {}; widthMeter.values (wv); for (size_t k = 0; k < 6; ++k) mWidthBands[k] = wv[k]; }
         mBlocks = mBlocks.load() + 1;
         mGr1 = maxGr1; mGr2 = maxGr2; mDuck = maxDuck; mIn = gainToDb (pkIn); mOut = gainToDb (pkOut);
         mWidth = dE > 1e-9f ? 10 * std::log10 (wE / dE + 1e-12f) : -100.0f;
+        inBlock = false;
     }
 };
 } // namespace sc

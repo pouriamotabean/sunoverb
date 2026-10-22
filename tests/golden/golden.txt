@@ -1,0 +1,28 @@
+# Golden metrics: name rms low mid high side-minus-mid peak hash (dB).
+# preset_ / black_ / session_v2_0: made with v2.0 (LEGACY EQ solver) - must stay bit-exact with GCC.
+# exact_: made with v2.0.2 (EXACT EQ solver, what the factory presets use).
+preset_Black_Male.json -18.239 -26.713 -19.473 -28.012 -15.798 -1.027 aaaf9570587e0814
+black_Black_Male.json -18.227 -26.701 -19.462 -27.999 -15.906 -1.184 e11793117f1e17df
+preset_Blue_Male.json -18.496 -27.237 -19.836 -27.296 -14.745 -0.933 8b49c157515cf938
+black_Blue_Male.json -18.487 -27.226 -19.827 -27.289 -14.640 -0.849 cc2e00197971943b
+preset_Dreamy_Male.json -17.911 -26.392 -19.142 -27.705 -13.349 -0.798 a29dec4b4e44d101
+black_Dreamy_Male.json -17.909 -26.389 -19.141 -27.691 -13.523 -0.829 513c10439bec104e
+preset_Pouria_Signature.json -19.490 -28.697 -21.054 -26.879 -16.410 -0.801 bdc2d46b90cac30
+black_Pouria_Signature.json -19.447 -28.628 -21.011 -26.851 -16.081 -0.683 ed8e250e07ce8e7f
+preset_Radio_Male.json -18.234 -27.575 -19.345 -27.845 -16.060 -1.083 28b18c90833a6b3b
+black_Radio_Male.json -18.222 -27.554 -19.335 -27.833 -15.873 -1.070 88d8d5f94ee62721
+preset_Suno_Lead_Reference.json -22.956 -30.752 -24.316 -32.834 -15.155 -5.985 91fa7d1f1068f206
+black_Suno_Lead_Reference.json -22.981 -30.747 -24.347 -32.872 -17.851 -6.062 23f40701a73f595
+preset_Suno_Male.json -18.142 -26.620 -19.374 -27.927 -15.999 -1.062 122bc7d10e2ab789
+black_Suno_Male.json -18.141 -26.587 -19.378 -27.937 -15.658 -0.885 959b9008e11ef9dc
+preset_Velvet_Male.json -17.678 -24.940 -19.018 -28.774 -18.245 -0.930 99262021222d89d
+black_Velvet_Male.json -17.675 -24.931 -19.017 -28.772 -17.940 -0.879 dc641520ee7dfe2e
+session_v2_0 -18.158 -26.595 -19.390 -28.001 -15.583 -0.788 65448b40eba54cb
+exact_Black_Male.json -18.498 -27.054 -19.577 -29.433 -15.684 -0.860 6c4866602b865c97
+exact_Blue_Male.json -19.196 -27.917 -20.430 -28.659 -14.661 -0.905 f33b7c79cd0f99d4
+exact_Dreamy_Male.json -18.635 -27.192 -19.712 -29.587 -13.230 -0.996 ccf032916273ca0c
+exact_Pouria_Signature.json -18.947 -28.026 -19.953 -29.746 -15.878 -0.974 784c99b66998fff0
+exact_Radio_Male.json -18.369 -27.882 -19.342 -28.883 -15.989 -0.868 3ab17c79cfb5039a
+exact_Suno_Lead_Reference.json -22.792 -30.654 -23.970 -34.110 -15.017 -5.273 97ccb524287d9b22
+exact_Suno_Male.json -18.600 -27.158 -19.678 -29.547 -15.879 -0.969 369d85e7d4731f0d
+exact_Velvet_Male.json -18.232 -25.540 -19.482 -30.155 -18.178 -0.942 49c1e305d7c10049

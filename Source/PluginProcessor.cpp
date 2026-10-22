@@ -52,37 +52,43 @@ void put (juce::var& root, const char* path, const juce::var& value)
     cur.getDynamicObject()->setProperty (juce::Identifier (keys[keys.size() - 1]), value);
 }
 
-juce::String curveToString (const std::array<float, sc::kNumBands>& c)
+// v2.0.1: learned curves are stored with full float precision (9 significant digits round-trip exactly), so a
+// reopened project sounds bit-identical to the one that was saved (v2.0 kept 3 decimals). Reading rejects
+// non-finite or absurd values (a damaged session must never feed NaN into the DSP).
+static juce::String floatToString (float v)
 {
-    juce::StringArray s;
-    for (auto v : c) s.add (juce::String (v, 3));
-    return s.joinIntoString (",");
-}
-
-bool curveFromString (const juce::String& str, std::array<float, sc::kNumBands>& c)
-{
-    auto t = juce::StringArray::fromTokens (str, ",", "");
-    if (t.size() != sc::kNumBands) return false;
-    for (int i = 0; i < sc::kNumBands; ++i) c[(size_t) i] = t[i].getFloatValue();
-    return true;
+    char buf[32]; std::snprintf (buf, sizeof (buf), "%.9g", (double) v);
+    return juce::String (buf);
 }
 
 template <size_t N>
 juce::String arrToString (const std::array<float, N>& c)
 {
     juce::StringArray s;
-    for (auto v : c) s.add (juce::String (v, 3));
+    for (auto v : c) s.add (floatToString (v));
     return s.joinIntoString (",");
 }
 
 template <size_t N>
-bool arrFromString (const juce::String& str, std::array<float, N>& c)
+bool arrFromString (const juce::String& str, std::array<float, N>& c, float limit = 200.0f)
 {
     auto t = juce::StringArray::fromTokens (str, ",", "");
     if (t.size() != (int) N) return false;
-    for (size_t i = 0; i < N; ++i) c[i] = t[(int) i].getFloatValue();
+    std::array<float, N> tmp {};
+    for (size_t i = 0; i < N; ++i)
+    {
+        const auto tok = t[(int) i].trim();
+        if (! tok.containsOnly ("0123456789+-.eE")) return false;
+        const float v = tok.getFloatValue();
+        if (! std::isfinite (v) || std::abs (v) > limit) return false;
+        tmp[i] = v;
+    }
+    c = tmp;
     return true;
 }
+
+juce::String curveToString (const std::array<float, sc::kNumBands>& c) { return arrToString (c); }
+bool curveFromString (const juce::String& str, std::array<float, sc::kNumBands>& c) { return arrFromString (str, c); }
 
 // numeric array at a dotted path (exact size), false if missing
 template <size_t N>
@@ -189,6 +195,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     // v1.11: harmonic exciter (replaces the tanh saturation): amount (100 % = fitted to Suno) and air tilt
     p.push_back (std::make_unique<APF> (juce::ParameterID { "harm", 6 }, "Harmonics", NRange (0, 200), 100.0f, pct));
     p.push_back (std::make_unique<APF> (juce::ParameterID { "air", 6 }, "Air", NRange (-12, 12), 5.0f, dB));   // v1.13 default +5 by ear
+    // appended last so every older parameter keeps its index
+    // v2.0.2: Match EQ / S/Z solver. On = EXACT (new sessions, factory presets); off = LEGACY (sessions and presets
+    // saved before v2.0.2 restore with it off, so they keep their sound). Host parameter, so it can be A/B'd.
+    p.push_back (std::make_unique<APB> (juce::ParameterID { "eqExact", 10 }, "EQ Solver Exact", true));
     return { p.begin(), p.end() };
 }
 
@@ -221,17 +231,32 @@ void SunoChainProcessor::installFactoryPresets()
     for (const auto& fp : factory::presets)
     {
         auto f = dir.getChildFile (fp.file);
-        if (! f.existsAsFile()) f.replaceWithText (juce::String::fromUTF8 (fp.json));
+        const auto text = juce::String::fromUTF8 (fp.json);
+        if (! f.existsAsFile()) { f.replaceWithText (text); continue; }
+        // v2.0.1 / v2.0.2: the factory presets now say BREATH 40 % and EQ solver EXACT explicitly (a preset without
+        // them loads with BREATH off / the LEGACY solver, as presets from before sounded). An installed copy that is
+        // exactly an older factory text (only those entries missing, never edited) is refreshed; edited files never.
+        juce::var onDisk, current;
+        if (juce::JSON::parse (f.loadFileAsString(), onDisk).failed() || juce::JSON::parse (text, current).failed()) continue;
+        if (! onDisk.isObject() || ! current.isObject()) continue;
+        const bool missing = (! has (onDisk, "user.breath") && has (current, "user.breath")) || (! has (onDisk, "eq.solver") && has (current, "eq.solver"));
+        if (! missing) continue;
+        // compare without the entries the installed copy does not have yet (an edited value always counts)
+        if (! has (onDisk, "user.breath")) if (auto* u = current["user"].getDynamicObject()) u->removeProperty ("breath");
+        if (! has (onDisk, "eq.solver"))   if (auto* e = current["eq"].getDynamicObject()) e->removeProperty ("solver");
+        if (juce::JSON::toString (onDisk, true) == juce::JSON::toString (current, true)) f.replaceWithText (text);
     }
 }
 
 // v1.14: a preset is checked completely before anything is applied (a broken file never half-loads)
-static bool validatePreset (const juce::var& json, juce::String& error)
+// strict = a preset file; !strict = the copy stored inside a session (v2.0.1: only the content is checked there,
+// so a session from any older version keeps its preset)
+static bool validatePreset (const juce::var& json, juce::String& error, bool strict = true)
 {
     if (! json.isObject()) { error = "Could not read the preset (not a JSON object)."; return false; }
-    if (json.getProperty ("format", "").toString() != "SunoChainPreset") { error = "Not a Suno Chain preset."; return false; }
+    if (strict && json.getProperty ("format", "").toString() != "SunoChainPreset") { error = "Not a Suno Chain preset."; return false; }
     const int ver = (int) json.getProperty ("version", 1);
-    if (ver > 7) { error = "This preset is from a newer Suno Chain (version " + juce::String (ver) + "). Please update the plugin."; return false; }
+    if (strict && ver > 7) { error = "This preset is from a newer Suno Chain (version " + juce::String (ver) + "). Please update the plugin."; return false; }
     auto arr = [&] (const juce::var& v, int n, bool required, const char* what) -> bool
     {
         if (v.isVoid() || v.isUndefined()) { if (required) { error = juce::String ("Preset is missing ") + what + "."; return false; } return true; }
@@ -239,7 +264,7 @@ static bool validatePreset (const juce::var& json, juce::String& error)
         for (auto& x : *v.getArray()) if (! (x.isInt() || x.isInt64() || x.isDouble()) || ! std::isfinite ((double) x)) { error = juce::String ("Preset has a non-number in ") + what + "."; return false; }
         return true;
     };
-    if (! arr (json["eq"]["target_curve_db"], sc::kNumBands, true, "EQ target curve")) return false;
+    if (! arr (json["eq"]["target_curve_db"], sc::kNumBands, strict, "EQ target curve")) return false;
     if (! arr (json["eq"]["target_curve_hz"], sc::kNumBands, false, "EQ frequency list")) return false;
     if (! arr (json["deesser"]["sib_curve_db"], 10, false, "S/Z curve")) return false;
     for (auto* sec : { "reverb", "delay", "width_layer" })
@@ -288,6 +313,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.reverbMode = v ("revBlack") > 0.5f ? 1 : 0;
     p.reverbFreeze = v ("revFreeze") > 0.5f;
     p.breathDb = 0.2f * v ("breath");
+    p.eqExact = v ("eqExact") > 0.5f;
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -336,7 +362,10 @@ void SunoChainProcessor::prepareToPlay (double sampleRate, int)
         const juce::SpinLock::ScopedLockType sl (presetLock);
         chain.p = buildParams();
     }
-    chain.prepare (sampleRate);
+    {
+        const juce::SpinLock::ScopedLockType ml (meterLock);   // the editor timer may be reading the meter
+        chain.prepare (sampleRate);
+    }
     chain.reset();
     setLatencySamples (chain.getLatency());
     dirty = false;
@@ -349,7 +378,7 @@ void SunoChainProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (auto pos = ph->getPosition())
             if (auto bpm = pos->getBpm())
                 if (std::abs (*bpm - hostBpm.load()) > 0.01 && *bpm > 10.0) { hostBpm = *bpm; dirty = true; }
-    if (dirty.load())
+    if (dirty.load() && paramBatch.load() == 0)   // v2.0.1: never apply a half-loaded preset / session
     {
         const juce::SpinLock::ScopedTryLockType sl (presetLock);
         if (sl.isLocked())
@@ -373,6 +402,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
     if (res.failed()) { error = "Could not read JSON: " + res.getErrorMessage(); return false; }
     if (! validatePreset (json, error)) return false;
 
+    const BatchScope batch (*this);   // the audio thread keeps the old settings until everything below is set
     {
         const juce::SpinLock::ScopedLockType sl (presetLock);
         presetJson = json;
@@ -436,7 +466,11 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
     set ("dynPeak", num (json, "user.dyn_peak", 100.0)); set ("dynLeveler", num (json, "user.dyn_leveler", 100.0));
     set ("dynSpeed", num (json, "user.dyn_speed", 100.0)); set ("dynPunch", num (json, "user.dyn_punch", 100.0));
         set ("harm", num (json, "user.harmonics", 100.0)); set ("air", num (json, "user.air_db", 5.0));
-        set ("breath", num (json, "user.breath", 40.0));
+        // v2.0.1: a preset saved before BREATH existed (<= v1.15.0) loads with BREATH off, so it sounds as it did;
+        // the factory presets carry user.breath = 40 explicitly
+        set ("breath", num (json, "user.breath", 0.0));
+        // v2.0.2: presets saved before the EXACT solver keep the LEGACY one (their sound)
+        set ("eqExact", json["eq"]["solver"].toString() == "exact" ? 1.0 : 0.0);
     dirty = true;
     return true;
 }
@@ -479,6 +513,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     }
     auto v = [this] (const char* id) { return (double) apvts.getRawParameterValue (id)->load(); };
     put (j, "eq.amount", v ("eqAmount") / 100.0);
+    put (j, "eq.solver", v ("eqExact") > 0.5 ? "exact" : "legacy");
     put (j, "saturation.drive_db", v ("satDrive"));
     put (j, "saturation.mix", v ("satMix") / 100.0);
     put (j, "reverb.on", v ("revOn") > 0.5);
@@ -594,6 +629,28 @@ void SunoChainProcessor::restorePresetFromTree()
     hidden.widthLpf       = (float) num (j, "width_layer.lpf_hz", 16000.0);
     hidden.widthBloomDb   = (float) num (j, "width_layer.bloom_db", 26.6);
     hidden.widthBloomMs   = (float) num (j, "width_layer.bloom_ms", 187.0);
+
+    // v2.0.1: a preset (or the copy inside a session) with absurd numbers must not reach the DSP. The ranges are
+    // far outside anything the analyzer writes (all factory and older presets are inside them, checked by
+    // tests), so real presets are untouched.
+    auto lim = [] (float& v, float lo, float hi) { v = std::isfinite (v) ? juce::jlimit (lo, hi, v) : juce::jlimit (lo, hi, 0.0f); };
+    for (auto& v : hidden.targetCurve) lim (v, -100.0f, 100.0f);
+    for (auto& v : hidden.sibTarget) lim (v, -100.0f, 100.0f);
+    for (auto& v : widthTargetSing) lim (v, -100.0f, 100.0f);
+    for (auto& v : widthTargetGap) lim (v, -100.0f, 100.0f);
+    lim (hidden.eqMaxBoostDb, 0, 40); lim (hidden.eqMaxCutDb, 0, 60); lim (hidden.eqMaxBoostHighDb, 0, 40);
+    lim (hidden.targetCrestDb, 0, 60); lim (hidden.targetSpreadDb, 0, 60); lim (hidden.levelerFactor, 0, 20); lim (hidden.punch, 0, 10);
+    lim (targetLufs, -70, 0); lim (hidden.compTotalGrDb, 0, 40);
+    lim (hidden.comp1Ratio, 1, 50); lim (hidden.comp1AttackMs, 0.01f, 1000); lim (hidden.comp1ReleaseMs, 1, 10000); lim (hidden.comp1Share, 0, 1);
+    lim (hidden.comp2Ratio, 1, 50); lim (hidden.comp2AttackMs, 0.01f, 1000); lim (hidden.comp2ReleaseMs, 1, 10000);
+    lim (hidden.xoverLowHz, 20, 5000); lim (hidden.xoverHighHz, 200, 20000);
+    lim (hidden.delayHpf, 10, 5000); lim (hidden.delayLpf, 200, 22000);
+    lim (hidden.rt60LowMul, 0.05f, 5); lim (hidden.rt60HighMul, 0.05f, 5); lim (hidden.crossoverHz, 50, 15000); lim (hidden.size, 0.1f, 4);
+    lim (hidden.modDepth, 0, 0.5f); lim (hidden.diffusion, 0, 0.99f); lim (hidden.diffusionSize, 0.1f, 8);
+    lim (hidden.earlyMs, 0, 500); lim (hidden.earlyLevelDb, -100, 12);
+    lim (hidden.wetBumpHz, 20, 20000); lim (hidden.wetBumpDb, -30, 30); lim (hidden.duckAttackMs, 0.01f, 1000);
+    lim (hidden.widthDelayMs, 0, 100); lim (hidden.widthShiftHz, 0, 50); lim (hidden.widthHpf, 10, 5000); lim (hidden.widthLpf, 500, 22000);
+    lim (hidden.widthBloomDb, 0, 80); lim (hidden.widthBloomMs, 1, 5000);
 }
 
 juce::String SunoChainProcessor::getPresetName() const { const juce::SpinLock::ScopedLockType sl (presetLock); return presetName; }
@@ -606,14 +663,14 @@ void SunoChainProcessor::startLearn()
         const juce::SpinLock::ScopedLockType sl (presetLock);
         learnAppliedCorr = sc::computeCorrection (buildParams());
     }
-    chain.learner.start();
+    chain.startLearn();
 }
 
 double SunoChainProcessor::learnSeconds() const { return chain.learner.nBlocks.load() * 0.05; }
 
 bool SunoChainProcessor::stopLearn (juce::String& message)
 {
-    chain.learner.stop();
+    chain.stopLearn();
     std::array<float, sc::kNumBands> curve {}, outCurve {};
     float level = 0, crest = 0, spread = 0;
     if (! chain.learner.summarise (curve, level, crest, spread, &outCurve))
@@ -646,11 +703,11 @@ bool SunoChainProcessor::stopLearn (juce::String& message)
     return true;
 }
 
-void SunoChainProcessor::startLoudMatch() { chain.loud.start(); }
+void SunoChainProcessor::startLoudMatch() { chain.startLoud(); }
 
 bool SunoChainProcessor::stopLoudMatch (juce::String& message)
 {
-    chain.loud.stop();
+    chain.stopLoud();
     const float measured = chain.loud.integrated();
     if (chain.loud.seconds() < 5.0 || measured < -69.0f)
     {
@@ -695,6 +752,12 @@ SunoChainProcessor::CurveSnapshot SunoChainProcessor::getCurves() const
     return s;
 }
 
+void SunoChainProcessor::pumpMeters()
+{
+    const juce::SpinLock::ScopedTryLockType ml (meterLock);
+    if (ml.isLocked()) chain.pumpMeters();
+}
+
 SunoChainProcessor::Meters SunoChainProcessor::getMeters() const
 {
     Meters m { chain.mGr1.load(), chain.mGr2.load(), chain.mDuck.load(), chain.mIn.load(), chain.mOut.load(), chain.mWidth.load(),
@@ -708,6 +771,7 @@ void SunoChainProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     juce::ValueTree extra ("EXTRA");
+    extra.setProperty ("stateVersion", kStateVersion, nullptr);   // v2.0.1: session schema (absent = v2.0 or older)
     {
         const juce::SpinLock::ScopedLockType sl (presetLock);
         extra.setProperty ("presetLoaded", presetLoaded, nullptr);
@@ -736,27 +800,56 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
     auto xml = getXmlFromBinary (data, sizeInBytes);
     if (xml == nullptr) return;
     auto state = juce::ValueTree::fromXml (*xml);
-    if (! state.isValid()) return;
+    if (! state.isValid() || ! state.hasType (apvts.state.getType())) return;   // not our session: ignore
     auto extra = state.getChildWithName ("EXTRA");
     state.removeChild (extra, nullptr);
+    const BatchScope batch (*this);
+    // v2.0.1: sanitise every stored parameter (NaN / out of range from a damaged session -> default / clamped) and
+    // give sessions from before a parameter existed the value that reproduces their old sound
+    for (auto* prm : getParameters())
+    {
+        auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm);
+        if (r == nullptr) continue;
+        auto child = state.getChildWithProperty ("id", r->getParameterID());
+        if (! child.isValid())
+        {
+            // BREATH arrived in v1.15.1 with a 40 % default: an older session had no breath control at all
+            // the EXACT EQ solver arrived in v2.0.2: an older session keeps the LEGACY one (its sound)
+            const auto pid = r->getParameterID();
+            const float legacy = (pid == "breath" || pid == "eqExact") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
+            juce::ValueTree c ("PARAM"); c.setProperty ("id", r->getParameterID(), nullptr); c.setProperty ("value", legacy, nullptr);
+            state.appendChild (c, nullptr);
+            continue;
+        }
+        const auto txt = child.getProperty ("value").toString().trim();
+        const double v = txt.getDoubleValue();
+        const bool numeric = txt.isNotEmpty() && txt.containsOnly ("0123456789+-.eE") && std::isfinite (v);
+        const auto range = r->getNormalisableRange();
+        child.setProperty ("value", numeric ? juce::jlimit (range.start, range.end, (float) v) : r->convertFrom0to1 (r->getDefaultValue()), nullptr);
+    }
     apvts.replaceState (state);
     if (extra.isValid())
     {
+        auto finiteOr = [] (const juce::var& v, double lo, double hi, double fallback)
+        {
+            const double d = (double) v; return std::isfinite (d) ? juce::jlimit (lo, hi, d) : fallback;
+        };
         const juce::SpinLock::ScopedLockType sl (presetLock);
         presetLoaded = (bool) extra.getProperty ("presetLoaded", false);
         presetName = extra.getProperty ("presetName", presetName).toString();
-        juce::var j;
-        if (juce::JSON::parse (extra.getProperty ("presetJson", "").toString(), j).wasOk() && j.isObject())
+        juce::var j; juce::String err;
+        // the embedded preset goes through the same validation as a preset file; a damaged one keeps the current
+        if (juce::JSON::parse (extra.getProperty ("presetJson", "").toString(), j).wasOk() && j.isObject() && validatePreset (j, err, false))
             presetJson = j;
         restorePresetFromTree();
         hidden.hasSource = (bool) extra.getProperty ("hasSource", false)
                            && curveFromString (extra.getProperty ("sourceCurve", "").toString(), hidden.sourceCurve);
         hidden.hasSourceLevel = hidden.hasSource;
-        hidden.sourceLevelDb = (float) (double) extra.getProperty ("sourceLevel", -18.0);
-        hidden.sourceCrestDb = hidden.hasSource ? (float) (double) extra.getProperty ("sourceCrest", 0.0) : 0.0f;
-        hidden.sourceSpreadDb = hidden.hasSource ? (float) (double) extra.getProperty ("sourceSpread", 0.0) : 0.0f;
+        hidden.sourceLevelDb = (float) finiteOr (extra.getProperty ("sourceLevel", -18.0), -120.0, 24.0, -18.0);
+        hidden.sourceCrestDb = hidden.hasSource ? (float) finiteOr (extra.getProperty ("sourceCrest", 0.0), 0.0, 60.0, 0.0) : 0.0f;
+        hidden.sourceSpreadDb = hidden.hasSource ? (float) finiteOr (extra.getProperty ("sourceSpread", 0.0), 0.0, 60.0, 0.0) : 0.0f;
         advancedOpen = (bool) extra.getProperty ("advancedOpen", false);
-        uiScale = juce::jlimit (0.6f, 1.6f, (float) (double) extra.getProperty ("uiScale", 1.0));
+        uiScale = (float) finiteOr (extra.getProperty ("uiScale", 1.0), 0.6, 1.6, 1.0);
         {
             const auto pf = extra.getProperty ("presetFile", "").toString();
             currentPresetFile = juce::File::isAbsolutePath (pf) ? juce::File (pf) : juce::File();

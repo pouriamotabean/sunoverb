@@ -63,7 +63,8 @@
   "amount": 1.0,
   "max_boost_db": 12.0,
   "max_cut_db": 24.0,
-  "max_boost_high_db": 15.0
+  "max_boost_high_db": 15.0,
+  "solver": "exact"
  },
  "dynamics": {
   "target_crest_db": 8.8,
@@ -268,7 +269,8 @@
   "dyn_speed": 100.0,
   "dyn_punch": 100.0,
   "harmonics": 100.0,
-  "air_db": 5.0
+  "air_db": 5.0,
+  "breath": 40.0
  },
  "description": "Neutral reference: your voice like the Suno male vocals, SUNO reverb."
 }

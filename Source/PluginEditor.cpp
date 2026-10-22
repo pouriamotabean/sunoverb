@@ -760,7 +760,7 @@ void Root::paint (juce::Graphics& g)
             glowLine (g, { bx, cy - h / 2, bx, cy + h / 2 }, col::cream, 1.6f, 0.75f);
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v1.15.1", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v2.0.2", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
         drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
     }
     // section titles
@@ -881,6 +881,7 @@ void Root::tick()
     advancedB.setToggleState (proc.advancedOpen, juce::dontSendNotification);
     if (freezeB.lit != freezeB.getToggleState()) { freezeB.lit = freezeB.getToggleState(); freezeB.repaint(); }
 
+    proc.pumpMeters();   // v2.0.1: the WIDTH analysis runs here, not in the audio callback
     auto m = proc.getMeters();
     meters.update (m);
     display.setWidth (m.widthBands);

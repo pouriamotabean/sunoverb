@@ -1,4 +1,4 @@
-# Suno Chain v1.15.1
+# Suno Chain v2.0.2
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -6,6 +6,72 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
 1. Replace the `Source/` folder in the repo with the one from this zip (`CMakeLists.txt` and `.github/workflows/build.yml` have not changed since the VS2026 fix; replacing everything is fine too).
 2. Push → **Actions** → when it's green, download **SunoChain-VST3** → copy it to `C:\Program Files\Common Files\VST3` → rescan in Cubase.
 3. If it's red, send me the log.
+
+## v2.0.2 (EXACT Match EQ solver, from Pouria's EQ solver report)
+- The LEGACY solver (g += 0.75 x error, 12 times) overshoots where neighbouring bands move together, so large or
+  tilted corrections missed the curve by several dB (reproduced: "Suno Male vs a flat voice" 10 dB average,
+  17.5 dB worst). The EXACT solver (regularised least squares + 6 corrections against the real response) hits every
+  test curve within 0.001 dB at 44.1 / 48 / 96 kHz and gives the same gains as the reference code (0.00000 dB).
+- Fast: everything that depends only on the sample rate is computed once per rate; a solve costs ~0.06 ms (the
+  reference took ~0.35 ms), so automating Amount / Match EQ / Low Boost / Air stays as light as in v2.0.1.
+- Used by the Match EQ and the S/Z Match. New host parameter "EQ Solver Exact" (on = EXACT, off = LEGACY), saved in
+  presets as eq.solver. New instances and the factory presets use EXACT; sessions and presets saved before v2.0.2
+  open with LEGACY (their sound unchanged: all 47 real-take renders bit-identical to v2.0.1 with LEGACY).
+- What it changes on a real voice (dry17, after Learn x2, full chain): level within 0.2 dB, most bands within 0.3 dB;
+  the biggest change is around 5 kHz (+0.6 to +1.2 dB on most presets, -1.4 dB on Pouria Signature) and the air band
+  (+0.3 to +0.8 dB; Pouria Signature -0.8 to -1.1 dB). Learn's closed loop had already absorbed most of the old
+  error, so the match to the Suno target only improves slightly (Pouria Signature 1.85 -> 1.72 dB). A/B files: one
+  pair per factory preset (A = LEGACY, B = EXACT).
+
+## v2.0.1 (reliability; the sound is unchanged)
+Done from the technical review (P0 + P1), with a regression test written BEFORE any change. Results: all 16 preset
+renders of the test app and the stored v2.0 session are bit-identical to v2.0; on Pouria's real takes (8 presets x
+SUNO/BLACK x 2 takes + BREATH renders, 47 files) 46 are bit-identical and one differs by at most -122 dBFS (the
+faster EQ solver below; inaudible, far under the 16-bit noise floor).
+- **Tests** (see TESTING.md): `SunoChainTests` runs the real processor: every factory preset (parse, validate, learn,
+  loudness, render, golden metrics), embedded presets == presets/*.json, session round trip / corrupt / legacy,
+  realtime (allocations, 4 sample rates x 5 block sizes x 3 layouts, automation, BLACK / FREEZE), concurrency,
+  latency, clicks. `render_cli` and the test app are CMake targets; CI builds them, checks the exact VST3 bundle,
+  checks that FactoryPresets.h is generated from the JSONs, runs the tests and pluginval (strictness 5).
+  Locally also: pluginval strictness 10 with GUI (passed), ThreadSanitizer and Address/UB sanitizers (clean).
+- **Old projects keep their sound**: a session from before BREATH (<= v1.15.0) now opens with BREATH off (it got
+  40 % before, which changed the old mix); the same for a preset file without a breath entry. The factory presets
+  say BREATH 40 % explicitly; unedited copies installed by v2.0 are refreshed, edited ones never touched.
+- **Reopening a project is exact**: learned curves are saved with full precision (v2.0 rounded to 3 decimals), and
+  prepareToPlay now resets every running state (a second play / sample-rate change rendered slightly differently).
+- **Damaged sessions are safe**: NaN / Inf / absurd values, broken JSON, wrong lengths, foreign data -> defaults or
+  clamped values, never NaN in the DSP. Every preset field is range-checked (all real presets are inside the ranges).
+- **No half-loaded presets**: while a preset or session is applied the audio keeps the previous settings, so it never
+  plays a mix of old and new values.
+- **Learn / Match Loudness race fixed** (found by ThreadSanitizer): start / stop now hand over cleanly between the
+  message and audio threads.
+- **CPU peaks**: the Match EQ solver (runs on the audio thread when Amount, Match EQ, Low Boost or Air are automated)
+  is 7x faster (0.7 -> 0.1 ms per change); the WIDTH graph analysis (two large FFTs every ~10 ms) moved from the
+  audio callback to the editor timer. Heaviest callback at 96 kHz / 64 samples: 1.29 -> 0.36 ms CPU.
+- **Tools**: `test_chain.py` reads the current preset schema (older presets migrated) and returns exit code 1 on
+  failure; `render_cli` rejects bad input (unknown keys, non-numbers, NaN, wrong sizes / rate) and never leaves a
+  half-written output; `tools/gen_factory_presets.py` generates FactoryPresets.h.
+
+## v2.0 (final)
+- Same sound as v1.15.2. Version 2.0.0, Persian user guide (GUIDE_FA.md).
+- Final test with the real plugin code: all 8 presets x SUNO / BLACK on two takes - no NaN, peaks -0.8 to -4 dBFS,
+  no clicks (the only one is in the input itself), level jumps only at note onsets.
+- Aliasing check: the chain has no waveshaper since v1.11 (tanh off, exciter off; SATURATION = Crisp, a 2-band
+  dynamics stage). A harmonic test tone with nothing above 9 kHz comes out with the 9-22 kHz band at -80 dB:
+  nothing new is generated, so no oversampling is needed.
+
+## New in v1.15.2 (BREATH really works)
+- v1.15.1's BREATH never fired on a real inhale: it compared against your *average* sung level, waited 120 ms after
+  singing and rejected anything with less than -15 dB below 1 kHz. Refitted on Pouria's own breath (dry.wav): an
+  inhale is 11-16 dB short under 1 kHz, 20-30 dB under the sung peak and starts ~60 ms after the phrase.
+- New detector: reference = your recent sung peak (falls 3 dB/s), breath = unvoiced, 18 dB under it (14 dB once
+  running), some energy left below 1 kHz, 40 ms after the voice, 60 ms long. Releases in 5 ms the moment the voice,
+  anything louder than a breath, or an s/sh hiss comes back (detector is 20 ms ahead, so the next note and its first
+  consonant are never cut).
+- Measured with the real plugin: Pouria's breath in the dry path is cut by 20 dB at 100 % (8 dB at the default 40 %).
+  What you still hear in that gap with the reverb on is the reverb tail of the phrase before, not the breath.
+  BREATH 0 % is bit-identical to v1.13.1; d112 / dry17 / dry25 at 40 %: one 10 ms frame -1.3 dB (a real pre-phrase
+  inhale), nothing else touched.
 
 ## New in v1.15.1 (crash fix, BREATH)
 - **Crash when removing the plugin (Windows)**: the GUI images were function-static juce::Image objects that
@@ -50,7 +116,7 @@ A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works wi
 ## New in v1.13.3 (rider)
 - **Rider**: 0-100 % unchanged; above 100 % it really rides (200 % = +/-6 dB, 80 % of the way): phrase-level
   spread 6.8 dB off -> 6.2 (100 %) -> 4.7 (200 %); tone unchanged. Everything else = v1.13.1.
-- The "z" in «روز خوش» (d112, ~12.5 s) is parked: S/Z variants (per-event, one-fraction rule, full take-back) did
+- The "z" in "ruz khosh" (d112, ~12.5 s) is parked: S/Z variants (per-event, one-fraction rule, full take-back) did
   not fix it by ear and 200 % damaged s/sh. Its voiced buzz carries a very pure 880 Hz harmonic (+30 dB over its
   surroundings, also in the dry, likely Auto-Tune), heard as ringing once the take is louder. To be re-checked on
   other vocals at the end before any fix (candidate: a resonance suppressor for sharp tonal peaks).
