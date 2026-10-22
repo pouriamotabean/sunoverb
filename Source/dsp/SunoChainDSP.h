@@ -118,6 +118,7 @@ struct Params
     // v1.14 reverb mode: 0 = SUNO (fitted to the Suno stems), 1 = BLACK (long, dense, wide, blooming; see BlackReverb)
     int reverbMode = 0;
     bool reverbFreeze = false;
+    bool sibGuard = false;   // v2.0.4 SIBILANT GUARD (false = before v2.0.4)
     bool eqExact = false;    // v2.0.2: EXACT Match EQ / S/Z solver (false = LEGACY, the v1.x - v2.0.1 sound)
     float breathDb = 8.0f;   // v1.15.1 BREATH (v1.15.2 detector): cut on breaths between phrases (knob 0-100 % = 0-20 dB)   // v1.15 FREEZE: the tail holds forever, nothing new enters
     float blackRtMul = 1.8f, blackHighMul = 0.6f, blackXoverHz = 4500.0f, blackWidth = 1.2f, blackLevelDb = 4.0f;
@@ -1326,6 +1327,90 @@ struct SibCeiling
 };
 
 //==============================================================================
+// v2.0.4 SIBILANT GUARD. Measured on Suno's own stems (4 male, 5 female): a sibilant sits on average 4-6 dB under
+// the vowel before it and practically never more than 5 dB above it (97th percentile +4.5 / +4.9 dB). The S/Z Match
+// lifts all of a singer's sibilants by the same amount, so a sibilant that was already much louder than that
+// singer's other ones ends far above that (Pouria's female test: one "s" at 48 s, +10 dB over the vowel). The
+// guard predicts each sibilant's level at the output (raw level 5 ms ahead + the chain's typical lift, a running
+// median measured on the output) and pulls only what is above +5 dB back down with a high shelf (2.5 kHz up,
+// max 12 dB). On the male test takes no sibilant reaches the ceiling (highest +3.1 dB): nothing changes there.
+// It acts only with a vowel in the last 300 ms, after 200 ms of singing and 5 sibilants. At 0 dB the shelf is an
+// exact identity.
+struct SibGuard
+{
+    static constexpr float kCeilingDb = 5.0f;   // sibilant over the vowel before it, Suno 97th percentile
+    Biquad hpD1, hpD2, lpD1, lpD2, hpO1, hpO2, lpO1, lpO2, shelf; double fs = 48000;
+    float eH = 0, eF = 0, eL = 0, oH = 0, oF = 0, oL = 0, peakRef = -200, peakFall = 0, envC = 0;
+    float vLvl = -200, vOut = -200, vC = 0, ls = 0, evPeak = -200, evPeakOut = -200, typLift = 0;
+    float gT = 1, tDb = 0, atk = 0, rel = 0, cutDb = 0, shelfDb = 0;
+    int count = 0, nEv = 0, sinceVowel = 1 << 30, freshLen = 0, voicedFor = 0, evLen = 0, minLen = 0; bool inEv = false;
+    float lastPeak = 0, lastPredicted = 0, evMaxCut = 0; int lastLen = 0;
+    static constexpr int kHist = 15; std::array<float, kHist> hist {};   // the chain's lift on the last sibilants
+    void prepare (double sampleRate)
+    {
+        fs = sampleRate;
+        for (auto* b : { &hpD1, &hpD2, &hpO1, &hpO2 }) { b->reset(); b->setHPF (fs, 2000.0); }
+        for (auto* b : { &lpD1, &lpD2, &lpO1, &lpO2 }) { b->reset(); b->setLPF (fs, 1500.0); }
+        shelf.reset(); shelf.setHighShelf (fs, 2500.0, 0.0, 0.6); shelfDb = 0;
+        eH = eF = eL = oH = oF = oL = 0; peakRef = -200; peakFall = (float) (1.0 * 8.0 / fs);
+        vLvl = vOut = -200; ls = 0; evPeak = evPeakOut = -200; typLift = 0; gT = 1; tDb = 0; cutDb = 0;
+        count = 0; nEv = 0; sinceVowel = 1 << 30; voicedFor = 0; evLen = 0; inEv = false; hist.fill (0);
+        envC = msToCoef (5.0f, fs); vC = msToCoef (300.0f, fs); atk = msToCoef (2.0f, fs); rel = msToCoef (40.0f, fs);
+        freshLen = (int) (0.3 * fs); minLen = (int) (0.025 * fs);
+    }
+    // l / r: the output so far; detL / detR: raw input 5 ms ahead (the S/Z detector's signal); sib: its weight 0..1
+    inline void process (float& l, float& r, float detL, float detR, float sib, float amount)
+    {
+        const float m = 0.5f * (detL + detR), h = hpD2.process (hpD1.process (m, 0), 0), lo = lpD2.process (lpD1.process (m, 0), 0);
+        eH = envC * eH + (1 - envC) * h * h; eF = envC * eF + (1 - envC) * m * m; eL = envC * eL + (1 - envC) * lo * lo;
+        const float mo = 0.5f * (l + r), ho = hpO2.process (hpO1.process (mo, 0), 0), loo = lpO2.process (lpO1.process (mo, 0), 0);
+        oH = envC * oH + (1 - envC) * ho * ho; oF = envC * oF + (1 - envC) * mo * mo; oL = envC * oL + (1 - envC) * loo * loo;
+        if ((++count & 7) == 0)
+        {
+            const float fdb = 10 * std::log10 (eF + 1e-12f), hdb = 10 * std::log10 (eH + 1e-14f);
+            const float fo = 10 * std::log10 (oF + 1e-12f), hoDb = 10 * std::log10 (oH + 1e-14f);
+            // a sung vowel: most energy under 1.5 kHz, above -50 dBFS and within 20 dB of the recent sung peak
+            const bool voiced = sib < 0.05f && eL > 0.5f * eF && fdb > -50.0f && (peakRef < -150 || fdb > peakRef - 20.0f);
+            if (voiced)
+            {
+                peakRef = std::max (peakRef, fdb); sinceVowel = 0; voicedFor += 8;
+                vLvl = vLvl < -150 ? fdb : vC * vLvl + (1 - vC) * fdb;
+                if (oL > 0.5f * oF) vOut = vOut < -150 ? fo : vC * vOut + (1 - vC) * fo;
+            }
+            else if (sinceVowel < (1 << 30)) sinceVowel += 8;
+            if (peakRef > -150) peakRef -= peakFall;
+            gT = 1.0f;
+            if (sib > 0.5f && vLvl > -150 && vOut > -150 && voicedFor > freshLen * 2 / 3 && sinceVowel < freshLen)
+            {
+                const float L = hdb - vLvl;   // raw sibilant over the raw vowel
+                ls = inEv ? 0.8f * ls + 0.2f * L : L;
+                if (! inEv) { inEv = true; evPeak = ls; evPeakOut = hoDb - vOut; evLen = 0; evMaxCut = 0; }
+                else { evPeak = std::max (evPeak, ls); evPeakOut = std::max (evPeakOut, hoDb - vOut); }
+                evLen += 8; evMaxCut = std::max (evMaxCut, cutDb);
+                if (nEv >= 5) gT = dbToGain (-std::clamp (ls + typLift - kCeilingDb, 0.0f, 12.0f) * std::min (1.0f, sib) * amount);
+            }
+            else if (inEv && sib <= 0.5f)
+            {   // a sibilant ended: how much did the chain lift it (output over its vowel vs raw over its vowel)?
+                inEv = false;
+                lastPeak = evPeak; lastLen = evLen; lastPredicted = evPeak + typLift;
+                if (evLen >= minLen && evMaxCut < 0.5f)   // blips (t, k, noise) and sibilants the guard itself cut do not count
+                {
+                    hist[(size_t) (nEv % kHist)] = evPeakOut - evPeak; ++nEv;
+                    const int n = std::min (nEv, kHist); std::array<float, kHist> srt = hist;
+                    std::nth_element (srt.begin(), srt.begin() + n / 2, srt.begin() + n);
+                    typLift = srt[(size_t) (n / 2)];
+                }
+            }
+            tDb = gT < 1.0f ? -gainToDb (gT) : 0.0f;
+        }
+        cutDb = tDb > cutDb ? atk * cutDb + (1 - atk) * tDb : rel * cutDb + (1 - rel) * tDb;   // 2 ms down, 40 ms back
+        if (cutDb < 0.001f) cutDb = 0.0f;
+        if (std::abs (cutDb - shelfDb) > 0.05f || (cutDb == 0.0f && shelfDb != 0.0f)) { shelfDb = cutDb; shelf.setHighShelf (fs, 2500.0, -shelfDb, 0.6); }
+        l = shelf.process (l, 0); r = shelf.process (r, 1);
+    }
+};
+
+//==============================================================================
 // Loudness meter (v1.8, Match Loudness): ITU-R BS.1770 integrated loudness of the plugin's output
 // (K-weighting, 400 ms blocks with 75 % overlap, -70 LUFS absolute and -10 LU relative gates).
 // The audio thread stores 100 ms mean squares while active; the message thread integrates them.
@@ -1611,7 +1696,7 @@ public:
     int freezeHold = 0, freezeHoldLen = 0;
     Biquad voiceLp1, voiceLp2, voiceHp1, voiceHp2; float vAll = 0, vLow = 0, vHigh = 0, vCoef = 0;   // voicing gate (v1.7)
     DeEsser deess;
-    SibCeiling sibCeil; DelayLine laRaw;
+    SibCeiling sibCeil; DelayLine laRaw; SibGuard sibGuard;   // v2.0.4
     Crisp crisp; Biquad airShelf; float airShelfDb = 0; ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
     StereoDelay delay;
     FDNReverb rev;
@@ -1656,7 +1741,7 @@ public:
         onHp1.reset(); onHp2.reset(); onHp1.setHPF (fs, 4500.0); onHp2.setHPF (fs, 4500.0); onFast = onSlow = 0; onG = 1;
         onFastC = msToCoef (3.0f, fs); onSlowC = msToCoef (60.0f, fs);
         rideEnv = 0; rideRef = -200; rideG = 0; rideEnvC = msToCoef (50.0f, fs); rideRefC = msToCoef (4000.0f, fs);
-        laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs);
+        laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs); sibGuard.prepare (fs);
         excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset();
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
         voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs); blk.prepare (fs); breath.prepare (fs);
@@ -1878,7 +1963,8 @@ public:
             laL.push (l); laR.push (r); laRaw.push (0.5f * (preL + preR));
             const float laOutL = laL.read (lookahead - 1), laOutR = laR.read (lookahead - 1);
             detL.push (preL); detR.push (preR);
-            deess.detect (detLag > 0 ? detL.read (detLag - 1) : preL, detLag > 0 ? detR.read (detLag - 1) : preR, 0.0f);
+            const float detNowL = detLag > 0 ? detL.read (detLag - 1) : preL, detNowR = detLag > 0 ? detR.read (detLag - 1) : preR;
+            deess.detect (detNowL, detNowR, 0.0f);
             // consonant flag (5 ms early) held 30 ms: the compressors freeze over s/z/sh/ch/j
             // voicing: share of energy below 1.5 kHz (vowels ~90 %, s/sh/ch/t/k/breath far below)
             {
@@ -1927,6 +2013,11 @@ public:
             if (p.excAmount > 0.001f && p.amount > 0)
                 crisp.process (l, r, p.excAmount * p.crispDepth * std::clamp (p.amount, 0.0f, 1.0f), pause || consonant || deess.k > 0.1f, deess.k);   // consonants pass untouched
             if (std::abs (airShelfDb) > 0.01f) { l = airShelf.process (l, 0); r = airShelf.process (r, 1); }
+            if (p.sibGuard)   // v2.0.4, after everything that lifts the top (EQ, S/Z Match, crisp, AIR)
+            {
+                sibGuard.process (l, r, detNowL, detNowR, deess.k, std::clamp (p.deessAmount, 0.0f, 1.0f) * std::clamp (p.amount, 0.0f, 1.0f));
+                maxDs = std::max (maxDs, sibGuard.cutDb);
+            }
             if (p.useExciter && (excGainA > 0 || excGainB > 0))
             {   // gate: off on consonants / breaths (S/Z detector weight and the unvoiced flag)
                 const float gt = 1.0f - std::min (1.0f, 1.5f * deess.k);   // S/Z detector (before the EQ): reliable on bright vowels too

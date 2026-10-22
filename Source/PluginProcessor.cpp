@@ -199,6 +199,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     // v2.0.2: Match EQ / S/Z solver. On = EXACT (new sessions, factory presets); off = LEGACY (sessions and presets
     // saved before v2.0.2 restore with it off, so they keep their sound). Host parameter, so it can be A/B'd.
     p.push_back (std::make_unique<APB> (juce::ParameterID { "eqExact", 10 }, "EQ Solver Exact", true));
+    // v2.0.4: SIBILANT GUARD (pulls back only sibilants far louder than the singer's usual ones). On for new
+    // sessions and the factory presets; off for sessions / presets saved before v2.0.4 (their sound).
+    p.push_back (std::make_unique<APB> (juce::ParameterID { "sibGuard", 11 }, "Sibilant Guard", true));
     return { p.begin(), p.end() };
 }
 
@@ -233,17 +236,24 @@ void SunoChainProcessor::installFactoryPresets()
         auto f = dir.getChildFile (fp.file);
         const auto text = juce::String::fromUTF8 (fp.json);
         if (! f.existsAsFile()) { f.replaceWithText (text); continue; }
-        // v2.0.1 / v2.0.2: the factory presets now say BREATH 40 % and EQ solver EXACT explicitly (a preset without
-        // them loads with BREATH off / the LEGACY solver, as presets from before sounded). An installed copy that is
-        // exactly an older factory text (only those entries missing, never edited) is refreshed; edited files never.
+        // v2.0.1 - v2.0.4: the factory presets now carry BREATH, the EQ solver and the SIBILANT GUARD explicitly (a
+        // preset without them loads as presets from before sounded). An installed copy that is exactly an older
+        // factory text (only those entries missing, never edited) is refreshed; an edited file never.
         juce::var onDisk, current;
         if (juce::JSON::parse (f.loadFileAsString(), onDisk).failed() || juce::JSON::parse (text, current).failed()) continue;
         if (! onDisk.isObject() || ! current.isObject()) continue;
-        const bool missing = (! has (onDisk, "user.breath") && has (current, "user.breath")) || (! has (onDisk, "eq.solver") && has (current, "eq.solver"));
+        static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" } };
+        bool missing = false;
+        for (auto& a : added)
+        {
+            const auto path = juce::String (a[0]) + "." + a[1];
+            if (! has (onDisk, path.toRawUTF8()) && has (current, path.toRawUTF8()))
+            {
+                missing = true;
+                if (auto* o = current[a[0]].getDynamicObject()) o->removeProperty (a[1]);   // compare without it
+            }
+        }
         if (! missing) continue;
-        // compare without the entries the installed copy does not have yet (an edited value always counts)
-        if (! has (onDisk, "user.breath")) if (auto* u = current["user"].getDynamicObject()) u->removeProperty ("breath");
-        if (! has (onDisk, "eq.solver"))   if (auto* e = current["eq"].getDynamicObject()) e->removeProperty ("solver");
         if (juce::JSON::toString (onDisk, true) == juce::JSON::toString (current, true)) f.replaceWithText (text);
     }
 }
@@ -314,6 +324,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.reverbFreeze = v ("revFreeze") > 0.5f;
     p.breathDb = 0.2f * v ("breath");
     p.eqExact = v ("eqExact") > 0.5f;
+    p.sibGuard = v ("sibGuard") > 0.5f;
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -471,6 +482,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
         set ("breath", num (json, "user.breath", 0.0));
         // v2.0.2: presets saved before the EXACT solver keep the LEGACY one (their sound)
         set ("eqExact", json["eq"]["solver"].toString() == "exact" ? 1.0 : 0.0);
+        set ("sibGuard", num (json, "deesser.guard", 0.0));   // v2.0.4: older presets without it keep their sound
     dirty = true;
     return true;
 }
@@ -514,6 +526,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     auto v = [this] (const char* id) { return (double) apvts.getRawParameterValue (id)->load(); };
     put (j, "eq.amount", v ("eqAmount") / 100.0);
     put (j, "eq.solver", v ("eqExact") > 0.5 ? "exact" : "legacy");
+    put (j, "deesser.guard", v ("sibGuard") > 0.5);
     put (j, "saturation.drive_db", v ("satDrive"));
     put (j, "saturation.mix", v ("satMix") / 100.0);
     put (j, "reverb.on", v ("revOn") > 0.5);
@@ -816,7 +829,7 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             // BREATH arrived in v1.15.1 with a 40 % default: an older session had no breath control at all
             // the EXACT EQ solver arrived in v2.0.2: an older session keeps the LEGACY one (its sound)
             const auto pid = r->getParameterID();
-            const float legacy = (pid == "breath" || pid == "eqExact") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
+            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
             juce::ValueTree c ("PARAM"); c.setProperty ("id", r->getParameterID(), nullptr); c.setProperty ("value", legacy, nullptr);
             state.appendChild (c, nullptr);
             continue;

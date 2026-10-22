@@ -116,7 +116,8 @@
   "sib_p90_db": 4.94,
   "n_sibilants": 48,
   "ratio": 6.0,
-  "max_cut_db": 20.0
+  "max_cut_db": 20.0,
+  "guard": true
  },
  "saturation": {
   "drive_db": 6.0,

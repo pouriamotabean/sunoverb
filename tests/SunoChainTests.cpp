@@ -286,6 +286,56 @@ static void finiteAndSane (const juce::AudioBuffer<float>& out, double fs, const
 }
 
 //==============================================================================
+static void suiteGuard()
+{
+    std::printf ("[guard] SIBILANT GUARD: an outlier sibilant is pulled down, normal ones are untouched\n");
+    const double fs = 44100;
+    auto vox = makeVocal (fs, 12.0);
+    // one "s" (the one at 7.2 s, a syllable start with an s burst) made 14 dB louder than the singer's other ones
+    auto loud = vox;
+    const int a0 = (int) (7.2 * fs), a1 = (int) (7.26 * fs);
+    {
+        juce::IIRFilter hp; hp.setCoefficients (juce::IIRCoefficients::makeHighPass (fs, 4500.0)); Lcg rng; rng.s = 99;
+        for (int i = (int) (7.0 * fs); i < a1; ++i) { const float v = hp.processSingleSampleRaw (rng.next()); if (i >= a0) for (int c = 0; c < 2; ++c) loud.setSample (c, i, loud.getSample (c, i) + 0.3f * v); }
+    }
+    auto render = [&] (const juce::AudioBuffer<float>& in, float guard)
+    {
+        Rig r (fs, 256); juce::String err;
+        r.loadPresetText (juce::String::fromUTF8 (factory::presets[6].json), "g.json", err);
+        r.set ("sibGuard", guard);
+        r.set ("revOn", 0.0f); r.set ("dlyOn", 0.0f);   // dry path only (the outlier's reverb tail is also quieter, as it should)
+        r.learnAndMatch (vox);    // learned on the normal take
+        r.p->prepareToPlay (fs, 256);
+        auto out = r.run (in); const int lat = r.p->getLatencySamples();
+        juce::AudioBuffer<float> al (2, in.getNumSamples()); al.clear();
+        for (int c = 0; c < 2; ++c) al.copyFrom (c, 0, out, c, lat, in.getNumSamples() - lat);
+        return al;
+    };
+    auto hfDb = [&] (const juce::AudioBuffer<float>& b, int s0, int s1)
+    {
+        juce::IIRFilter hp; hp.setCoefficients (juce::IIRCoefficients::makeHighPass (fs, 3000.0)); double e = 0;
+        for (int i = juce::jmax (0, s0 - 2000); i < s1; ++i) { const float v = hp.processSingleSampleRaw (0.5f * (b.getSample (0, i) + b.getSample (1, i))); if (i >= s0) e += v * v; }
+        return 10.0 * std::log10 (e / juce::jmax (1, s1 - s0) + 1e-20);
+    };
+    auto off = render (loud, 0.0f), on = render (loud, 1.0f);
+    const double cutOutlier = hfDb (off, a0, a1) - hfDb (on, a0, a1);
+    check (cutOutlier > 3.0, "outlier sibilant pulled down (" + juce::String (cutOutlier, 1) + " dB above 3 kHz)");
+    // every other sibilant: the same with and without the guard
+    double worst = 0;
+    for (double t = 0.3; t < 11.5; t += 0.3)
+    {
+        const int s0 = (int) (t * fs), s1 = (int) ((t + 0.06) * fs);
+        if (s1 > (int) (6.9 * fs) && s0 < (int) (7.6 * fs)) continue;
+        const double d = std::abs (hfDb (off, s0, s1) - hfDb (on, s0, s1));
+        if (gVerbose && d > 0.2) info ("  changed at " + juce::String (t, 1) + " s: " + juce::String (d, 2) + " dB");
+        worst = std::max (worst, d);
+    }
+    check (worst < 0.3, "normal sibilants untouched (largest change " + juce::String (worst, 2) + " dB)");
+    auto offN = render (vox, 0.0f), onN = render (vox, 1.0f);
+    check (measure (offN, fs).hash == measure (onN, fs).hash || std::abs (measure (offN, fs).high - measure (onN, fs).high) < 0.05,
+           "take without an outlier: same sound with and without the guard");
+}
+
 static void suitePresets()
 {
     std::printf ("[presets] every factory preset: parse, validate, learn x2, match loudness, render (LEGACY and EXACT EQ)\n");
@@ -297,6 +347,7 @@ static void suitePresets()
             Rig e (fs, 256); juce::String err;
             e.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (e.get ("eqExact") == 1.0f, juce::String (fp.file) + ": factory preset uses the EXACT EQ solver");
+            check (e.get ("sibGuard") == 1.0f, juce::String (fp.file) + ": factory preset uses the SIBILANT GUARD");
             e.learnAndMatch (vox);
             auto outE = e.run (vox);
             finiteAndSane (outE, fs, juce::String (fp.file) + " EXACT");
@@ -308,7 +359,7 @@ static void suitePresets()
         const bool ok = r.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
         check (ok, juce::String (fp.file) + ": loads (" + err + ")");
         if (! ok) continue;
-        r.set ("eqExact", 0.0f);
+        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f);   // = v2.0
         r.learnAndMatch (vox);
         auto out = r.run (vox);
         finiteAndSane (out, fs, fp.file);
@@ -445,6 +496,15 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             d2.p->setStateInformation (legacy2.getData(), (int) legacy2.getSize());
         }
         check (d2.get ("eqExact") == 0.0f, "session from before v2.0.2 restores with the LEGACY EQ solver");
+        {
+            Rig d3 (fs, 256);
+            auto x4 = xmlOf (s1);
+            for (auto* e = x4->getFirstChildElement(); e != nullptr; e = e->getNextElement())
+                if (e->getStringAttribute ("id") == "sibGuard") { x4->removeChildElement (e, true); break; }
+            auto legacy3 = blobOf (*x4);
+            d3.p->setStateInformation (legacy3.getData(), (int) legacy3.getSize());
+            check (d3.get ("sibGuard") == 0.0f, "session from before v2.0.4 restores with the SIBILANT GUARD off");
+        }
         Rig fresh (fs, 256);
         check (fresh.get ("eqExact") == 1.0f, "a new instance uses the EXACT EQ solver");
     }
@@ -732,6 +792,7 @@ int main (int argc, char** argv)
     auto want = [&] (const char* s) { return only.isEmpty() || only.contains (s); };
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
     if (want ("solver")) suiteSolver();
+    if (want ("guard")) suiteGuard();
     if (want ("presets")) suitePresets();
     if (want ("sync") && presetsDir != juce::File()) suiteSync (presetsDir);
     if (want ("state")) suiteState (blobIn, blobOut);

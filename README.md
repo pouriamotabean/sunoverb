@@ -1,4 +1,4 @@
-# Suno Chain v2.0.3
+# Suno Chain v2.0.4
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,21 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.0.4 (female presets, SIBILANT GUARD)
+- **Suno Female** and **Black Female** factory presets: the voice-dependent measurements (EQ target, S/Z curve,
+  crest / spread, width targets) from 5 Suno female lead stems (median / mean); the by-ear character (reverb,
+  width, ducking, knobs) from Suno Male / Black Male. Loudness target kept from the male presets (the female stems
+  were 5-8 dB quieter mixes; switching presets should not jump in level).
+- Pouria's female test (01_vox): through Suno Male one "s" at 48 s ended 10 dB above the vowel before it (Suno's own
+  stems: 97 % of sibilants are below +5 dB, measured on 4 male + 5 female stems). Through Suno Female it is at
+  +5.8 dB and the singer's sibilants sit like Suno's female ones (median -6.6 dB under the vowel).
+- **SIBILANT GUARD** (new host parameter "Sibilant Guard", on for new sessions and the factory presets, off for
+  older sessions / presets): predicts each sibilant's level at the output (raw level 5 ms ahead + the chain's
+  typical lift) and pulls only what is above +5 dB over the vowel back down (high shelf from 2.5 kHz, max 12 dB).
+  Male test takes: no frame changes by more than 1 dB. Test: a sibilant made 14 dB louder is pulled down 6.4 dB,
+  all others change < 0.03 dB.
+- Older sessions: LEGACY EQ + guard off, bit-identical to v2.0.1.
+
 ## v2.0.3 (Windows installer; the sound is unchanged)
 - Installer (Inno Setup) built by CI: replaces the VST3 cleanly, asks to close a running host first, uninstall entry.
 - A green build on main becomes a GitHub Release with the installer attached.
