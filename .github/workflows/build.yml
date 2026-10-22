@@ -60,7 +60,12 @@ jobs:
           $log = & $iscc "/DAppVersion=$env:SC_VERSION" "/DBundleDir=$env:VST3_PATH" "/DOutDir=$out" installer\SunoChain.iss 2>&1
           $code = $LASTEXITCODE
           $log | ForEach-Object { echo $_ }
-          if ($code -ne 0) { $log | Select-Object -Last 20 | ForEach-Object { echo "::error::ISCC: $_" }; exit 1 }
+          if ($code -ne 0) {
+            # GitHub keeps only 10 annotations per step: the error lines first, then the very end of the log
+            $err = @($log | Where-Object { "$_" -match 'rror|Line \d+|Column|Unknown|Invalid|not found' }) + @($log | Select-Object -Last 3)
+            $err | Select-Object -First 9 | ForEach-Object { echo "::error::ISCC: $_" }
+            exit 1
+          }
           $setup = Join-Path $out "SunoChain_Setup_v$env:SC_VERSION.exe"
           if (-not (Test-Path $setup)) { throw "installer not created" }
           echo "SETUP_PATH=$setup" >> $env:GITHUB_ENV
