@@ -65,11 +65,12 @@ begin
     for I := 0 to Procs.Count - 1 do
     begin
       P := Procs.ItemIndex(I);
-      N := Lowercase(P.Name);
+      N := P.Name;
+      N := Lowercase(N);
       if (Pos('cubase', N) = 1) or (Pos('nuendo', N) = 1) or (Pos('ableton', N) = 1) or (N = 'reaper.exe')
          or (Pos('fl64', N) = 1) or (Pos('studio one', N) = 1) or (Pos('vstbridge', N) > 0) then
       begin
-        Result := P.Name;
+        Result := N;
         Exit;
       end;
     end;
