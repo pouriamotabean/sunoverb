@@ -1,13 +1,12 @@
 # Suno Chain – Roadmap
 
-Current version: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
+Current version: **v2.0.3** (Windows installer + releases). Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
 
 ## 1. Next steps (in order)
 1. **Pouria tests v2.0** on his own and other vocals; all sound / GUI issues reported at once and fixed in one release.
 2. **More factory presets**: Pouria builds presets (including female-vocal presets) and they are embedded in
    `Source/FactoryPresets.h` next to the current eight.
-3. **Windows installer** (setup.exe built by GitHub Actions): installs the VST3 and the factory presets with one
-   double-click. Only after the v2.0 tests come back clean.
+3. ~~Windows installer~~ done in v2.0.3 (Releases page).
 4. **v2.1 – LEARN SUNO**: build a preset inside the plugin from a Suno vocal.
    - Where: a LEARN SUNO button next to LEARN, or drag a Suno stem (from Windows or Cubase) onto the plugin.
    - How: analysis on a background thread (playback never stops), progress bar, a summary of what was learned with a

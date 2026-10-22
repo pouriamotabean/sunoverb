@@ -1,11 +1,17 @@
-# Suno Chain v2.0.2
+# Suno Chain v2.0.3
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
-## Build
-1. Replace the `Source/` folder in the repo with the one from this zip (`CMakeLists.txt` and `.github/workflows/build.yml` have not changed since the VS2026 fix; replacing everything is fine too).
-2. Push → **Actions** → when it's green, download **SunoChain-VST3** → copy it to `C:\Program Files\Common Files\VST3` → rescan in Cubase.
-3. If it's red, send me the log.
+## Install (since v2.0.3)
+GitHub builds a Windows installer on every push. When the run is green it is published on the repository's
+**Releases** page: download `SunoChain_Setup_vX.Y.Z.exe`, close Cubase, run it. It replaces the plugin in
+`C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
+never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
+in the run's artifacts (SunoChain-Setup).
+## v2.0.3 (Windows installer; the sound is unchanged)
+- Installer (Inno Setup) built by CI: replaces the VST3 cleanly, asks to close a running host first, uninstall entry.
+- A green build on main becomes a GitHub Release with the installer attached.
+- The CI workflow is in the right place again (.github/workflows): the tests and pluginval from v2.0.1 now really run.
 
 ## v2.0.2 (EXACT Match EQ solver, from Pouria's EQ solver report)
 - The LEGACY solver (g += 0.75 x error, 12 times) overshoots where neighbouring bands move together, so large or
