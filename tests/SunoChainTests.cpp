@@ -342,12 +342,23 @@ static void suitePresets()
     const double fs = 44100; auto vox = makeVocal (fs, 12.0);
     for (const auto& fp : factory::presets)
     {
-        // EXACT solver (what the factory preset asks for since v2.0.2): its own golden entries
+        // VOWEL EQ (what the factory preset asks for since v2.1): its own golden entries
+        {
+            Rig v (fs, 256); juce::String err;
+            v.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
+            check (v.get ("eqVowel") == 1.0f, juce::String (fp.file) + ": factory preset uses the VOWEL EQ");
+            v.learnAndMatch (vox);
+            auto outV = v.run (vox);
+            finiteAndSane (outV, fs, juce::String (fp.file) + " VOWEL");
+            compareGolden (juce::String ("vowel_") + fp.file, measure (outV, fs, v.p->getLatencySamples()));
+        }
+        // EXACT solver on the full spectrum (= v2.0.2 - v2.0.4, i.e. VOWEL EQ off): must keep its golden entries
         {
             Rig e (fs, 256); juce::String err;
             e.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (e.get ("eqExact") == 1.0f, juce::String (fp.file) + ": factory preset uses the EXACT EQ solver");
             check (e.get ("sibGuard") == 1.0f, juce::String (fp.file) + ": factory preset uses the SIBILANT GUARD");
+            e.set ("eqVowel", 0.0f);
             e.learnAndMatch (vox);
             auto outE = e.run (vox);
             finiteAndSane (outE, fs, juce::String (fp.file) + " EXACT");
@@ -359,7 +370,7 @@ static void suitePresets()
         const bool ok = r.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
         check (ok, juce::String (fp.file) + ": loads (" + err + ")");
         if (! ok) continue;
-        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f);   // = v2.0
+        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f);   // = v2.0
         r.learnAndMatch (vox);
         auto out = r.run (vox);
         finiteAndSane (out, fs, fp.file);
@@ -505,8 +516,18 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             d3.p->setStateInformation (legacy3.getData(), (int) legacy3.getSize());
             check (d3.get ("sibGuard") == 0.0f, "session from before v2.0.4 restores with the SIBILANT GUARD off");
         }
+        {
+            Rig d4 (fs, 256);
+            auto x5 = xmlOf (s1);
+            for (auto* e = x5->getFirstChildElement(); e != nullptr; e = e->getNextElement())
+                if (e->getStringAttribute ("id") == "eqVowel") { x5->removeChildElement (e, true); break; }
+            auto legacy4 = blobOf (*x5);
+            d4.p->setStateInformation (legacy4.getData(), (int) legacy4.getSize());
+            check (d4.get ("eqVowel") == 0.0f, "session from before v2.1 restores with the VOWEL EQ off");
+        }
         Rig fresh (fs, 256);
         check (fresh.get ("eqExact") == 1.0f, "a new instance uses the EXACT EQ solver");
+        check (fresh.get ("eqVowel") == 1.0f, "a new instance uses the VOWEL EQ");
     }
     {   // installed factory presets from v2.0 (no breath entry, never edited) are refreshed; edited copies are not
         auto dir = SunoChainProcessor::presetFolder();
@@ -536,6 +557,21 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             e2.loadPresetText (juce::JSON::toString (x3), "old_eq.json", err);
         }
         check (e2.get ("eqExact") == 0.0f, "preset without eq.solver loads with the LEGACY EQ solver");
+        {
+            Rig e4 (fs, 256);
+            auto x6 = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[6].json));
+            if (auto* q = x6["eq"].getDynamicObject()) q->removeProperty ("vowel");
+            e4.loadPresetText (juce::JSON::toString (x6), "old_vowel.json", err);
+            check (e4.get ("eqVowel") == 0.0f, "preset without eq.vowel (before v2.1) loads with the VOWEL EQ off");
+            auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("sct_saved_v.json");
+            for (float v : { 0.0f, 1.0f })
+            {
+                e4.set ("eqVowel", v); juce::String er2; e4.p->savePresetFile (tmp, er2);
+                Rig e5 (fs, 256); e5.p->loadPresetFile (tmp, er2);
+                check (e5.get ("eqVowel") == v, "saved preset keeps the VOWEL EQ switch (" + juce::String (v, 0) + ")");
+            }
+            tmp.deleteFile();
+        }
         {   // save -> load keeps the solver choice
             auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("sct_saved.json");
             for (float v : { 0.0f, 1.0f })

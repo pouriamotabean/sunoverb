@@ -36,6 +36,8 @@ def validate(name, j):
     if not j.get("name"): errs.append("name missing")
     c = j.get("eq", {}).get("target_curve_db")
     if not (isinstance(c, list) and len(c) == 26): errs.append("eq.target_curve_db needs 26 values")
+    v = j.get("eq", {}).get("target_curve_voiced_db")
+    if v is not None and not (isinstance(v, list) and len(v) == 26): errs.append("eq.target_curve_voiced_db needs 26 values")
     s = j.get("deesser", {}).get("sib_curve_db")
     if s is not None and len(s) != 10: errs.append("deesser.sib_curve_db needs 10 values")
     if errs: raise SystemExit(name + ": " + "; ".join(errs))

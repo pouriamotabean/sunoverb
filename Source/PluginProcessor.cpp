@@ -202,6 +202,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     // v2.0.4: SIBILANT GUARD (pulls back only sibilants far louder than the singer's usual ones). On for new
     // sessions and the factory presets; off for sessions / presets saved before v2.0.4 (their sound).
     p.push_back (std::make_unique<APB> (juce::ParameterID { "sibGuard", 11 }, "Sibilant Guard", true));
+    // v2.1: VOWEL EQ (the Match EQ compares your vowels with Suno's vowels; sibilants stay with the S/Z Match).
+    // On for new sessions and the factory presets; off for sessions / presets saved before v2.1 (their sound).
+    p.push_back (std::make_unique<APB> (juce::ParameterID { "eqVowel", 13 }, "Vowel EQ", true));
     return { p.begin(), p.end() };
 }
 
@@ -242,7 +245,7 @@ void SunoChainProcessor::installFactoryPresets()
         juce::var onDisk, current;
         if (juce::JSON::parse (f.loadFileAsString(), onDisk).failed() || juce::JSON::parse (text, current).failed()) continue;
         if (! onDisk.isObject() || ! current.isObject()) continue;
-        static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" } };
+        static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" }, { "eq", "vowel" }, { "eq", "target_curve_voiced_db" } };
         bool missing = false;
         for (auto& a : added)
         {
@@ -276,6 +279,7 @@ static bool validatePreset (const juce::var& json, juce::String& error, bool str
     };
     if (! arr (json["eq"]["target_curve_db"], sc::kNumBands, strict, "EQ target curve")) return false;
     if (! arr (json["eq"]["target_curve_hz"], sc::kNumBands, false, "EQ frequency list")) return false;
+    if (! arr (json["eq"]["target_curve_voiced_db"], sc::kNumBands, false, "vowel EQ target curve")) return false;
     if (! arr (json["deesser"]["sib_curve_db"], 10, false, "S/Z curve")) return false;
     for (auto* sec : { "reverb", "delay", "width_layer" })
         if (! arr (json[sec]["band_width_db"], 3, false, "width per band")) return false;
@@ -325,6 +329,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.breathDb = 0.2f * v ("breath");
     p.eqExact = v ("eqExact") > 0.5f;
     p.sibGuard = v ("sibGuard") > 0.5f;
+    p.eqVowel = v ("eqVowel") > 0.5f;
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -482,7 +487,8 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
         set ("breath", num (json, "user.breath", 0.0));
         // v2.0.2: presets saved before the EXACT solver keep the LEGACY one (their sound)
         set ("eqExact", json["eq"]["solver"].toString() == "exact" ? 1.0 : 0.0);
-        set ("sibGuard", num (json, "deesser.guard", 0.0));   // v2.0.4: older presets without it keep their sound
+        set ("sibGuard", num (json, "deesser.guard", 0.0));
+        set ("eqVowel", num (json, "eq.vowel", 0.0));   // v2.1: older presets without it keep their sound
     dirty = true;
     return true;
 }
@@ -502,6 +508,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         juce::Array<juce::var> curve;
         for (auto v : hidden.targetCurve) curve.add (v);
         put (j, "eq.target_curve_db", curve);
+        if (hidden.hasTargetV) put (j, "eq.target_curve_voiced_db", toVarArray (hidden.targetCurveV));
         put (j, "dynamics.target_crest_db", hidden.targetCrestDb);
         put (j, "dynamics.target_spread400_db", hidden.targetSpreadDb);
         put (j, "dynamics.leveler_factor", hidden.levelerFactor);
@@ -527,6 +534,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "eq.amount", v ("eqAmount") / 100.0);
     put (j, "eq.solver", v ("eqExact") > 0.5 ? "exact" : "legacy");
     put (j, "deesser.guard", v ("sibGuard") > 0.5);
+    put (j, "eq.vowel", v ("eqVowel") > 0.5);
     put (j, "saturation.drive_db", v ("satDrive"));
     put (j, "saturation.mix", v ("satMix") / 100.0);
     put (j, "reverb.on", v ("revOn") > 0.5);
@@ -581,6 +589,11 @@ void SunoChainProcessor::restorePresetFromTree()
     {
         for (int i = 0; i < sc::kNumBands; ++i) hidden.targetCurve[(size_t) i] = (float) (double) c[i];
         hidden.hasTarget = true;
+    }
+    {   // v2.1: the Suno vowel curve (presets made before v2.1 have none: the VOWEL EQ then uses the full curve)
+        auto cv = j.isObject() ? j["eq"]["target_curve_voiced_db"] : juce::var();
+        hidden.hasTargetV = cv.isArray() && cv.size() == sc::kNumBands;
+        if (hidden.hasTargetV) for (int i = 0; i < sc::kNumBands; ++i) hidden.targetCurveV[(size_t) i] = juce::jlimit (-100.0f, 100.0f, (float) (double) cv[i]);
     }
     hidden.eqMaxBoostDb   = (float) num (j, "eq.max_boost_db", 12.0);
     hidden.eqMaxCutDb     = (float) num (j, "eq.max_cut_db", 24.0);
@@ -701,6 +714,13 @@ bool SunoChainProcessor::stopLearn (juce::String& message)
         hidden.sourceCrestDb = crest;
         hidden.sourceSpreadDb = spread;
     }
+    {   // v2.1 VOWEL EQ: the same over the vowel frames only
+        std::array<float, sc::kNumBands> cv {}, ov {};
+        const bool okV = chain.learner.summariseVoiced (cv, ov);
+        const juce::SpinLock::ScopedLockType sl (presetLock);
+        hidden.hasSourceV = okV; hidden.hasChainEffectV = okV;
+        if (okV) { hidden.sourceCurveV = cv; hidden.chainEffectV = sc::Learner::chainEffectFrom (cv, ov, learnAppliedCorr); }
+    }
     std::array<float, 10> sib {};
     const int nSib = chain.learner.sib.summarise (sib);
     {
@@ -747,7 +767,7 @@ void SunoChainProcessor::clearLearn()
     {
         const juce::SpinLock::ScopedLockType sl (presetLock);
         hidden.hasSource = false; hidden.hasSourceLevel = false; hidden.sourceCrestDb = 0; hidden.sourceSpreadDb = 0;
-        hidden.hasSibSource = false; hidden.hasChainEffect = false;
+        hidden.hasSibSource = false; hidden.hasChainEffect = false; hidden.hasSourceV = false; hidden.hasChainEffectV = false;
     }
     dirty = true;
 }
@@ -802,6 +822,9 @@ void SunoChainProcessor::getStateInformation (juce::MemoryBlock& destData)
         extra.setProperty ("sibSource", arrToString (hidden.sibSource), nullptr);
         extra.setProperty ("hasChainEffect", hidden.hasChainEffect, nullptr);
         extra.setProperty ("chainEffect", arrToString (hidden.chainEffect), nullptr);
+        extra.setProperty ("hasSourceV", hidden.hasSourceV, nullptr);   // v2.1 VOWEL EQ
+        extra.setProperty ("sourceCurveV", arrToString (hidden.sourceCurveV), nullptr);
+        extra.setProperty ("chainEffectV", arrToString (hidden.chainEffectV), nullptr);
     }
     state.removeChild (state.getChildWithName ("EXTRA"), nullptr);
     state.appendChild (extra, nullptr);
@@ -829,7 +852,7 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             // BREATH arrived in v1.15.1 with a 40 % default: an older session had no breath control at all
             // the EXACT EQ solver arrived in v2.0.2: an older session keeps the LEGACY one (its sound)
             const auto pid = r->getParameterID();
-            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
+            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard" || pid == "eqVowel") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
             juce::ValueTree c ("PARAM"); c.setProperty ("id", r->getParameterID(), nullptr); c.setProperty ("value", legacy, nullptr);
             state.appendChild (c, nullptr);
             continue;
@@ -871,6 +894,10 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
                                 && arrFromString (extra.getProperty ("chainEffect", "").toString(), hidden.chainEffect);
         hidden.hasSibSource = hidden.hasSource && (bool) extra.getProperty ("hasSibSource", false)
                               && arrFromString (extra.getProperty ("sibSource", "").toString(), hidden.sibSource);
+        hidden.hasSourceV = hidden.hasSource && (bool) extra.getProperty ("hasSourceV", false)
+                            && arrFromString (extra.getProperty ("sourceCurveV", "").toString(), hidden.sourceCurveV)
+                            && arrFromString (extra.getProperty ("chainEffectV", "").toString(), hidden.chainEffectV);
+        hidden.hasChainEffectV = hidden.hasSourceV;
     }
     dirty = true;
 }

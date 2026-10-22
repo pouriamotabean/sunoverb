@@ -1,4 +1,4 @@
-# Suno Chain v2.0.4
+# Suno Chain v2.1.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,21 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.1.0 (VOWEL EQ: the "slightly sharper" top fixed)
+- Pouria heard v2.0.2+ "a little sharper". Measured on his takes: the vowels came out 4-8 dB brighter than Suno's
+  vowels at 6-8 kHz (male +2.5 / +4.8 dB, female +7.7 / +6.8 dB at 6.3 / 8 kHz). Cause: the Match EQ target was the
+  whole spectrum (vowels + the highs of the sibilants), plus the by-ear x1.5 high boost from v1.12 that the EXACT
+  solver (v2.0.2) now delivers in full.
+- **VOWEL EQ** (new host parameter "Vowel EQ", on for new sessions and the factory presets, off for older sessions
+  / presets): Learn measures your vowel frames only (>= 70 % of the energy below 1.5 kHz) and the Match EQ moves them
+  onto the Suno vowel curve (`eq.target_curve_voiced_db`, new in every factory preset). The sibilants stay with the
+  S/Z Match and the guard. The x1.5 air boost is not used in this mode.
+- Result (vowels minus Suno vowels, 6.3 / 8 / 10 / 12.5 kHz): male +0.1 / -0.2 / -2.6 / -1.0 dB, female
+  +0.5 / -0.3 / -2.4 / -1.9 dB. Learn run on the output measures it within +-1.5 dB of the target except narrow
+  single bands (the EQ deliberately does not follow narrow peaks of the Suno singer's formants). Sibilants unchanged.
+- `tools/suno_analyze.py` writes the vowel curve for new presets. Older sessions and presets: bit-identical to
+  v2.0.4 (tests: golden `exact_*`, `preset_*`, `black_*` unchanged; new `vowel_*`).
+
 ## v2.0.4 (female presets, SIBILANT GUARD)
 - **Suno Female** and **Black Female** factory presets: the voice-dependent measurements (EQ target, S/Z curve,
   crest / spread, width targets) from 5 Suno female lead stems (median / mean); the by-ear character (reverb,

@@ -120,15 +120,23 @@ class Measure:
                 if not self.ons or i - self.ons[-1] > 100: self.ons.append(i)
 
     # ---- spectrum / dynamics (dry-side measurements) ----
-    def target_curve(self):
+    def target_curve(self, voiced=False):
+        """Long-term spectrum of the loud frames. voiced=True (v2.1 VOWEL EQ): only frames with >= 70 % of their
+        energy under 1.5 kHz (sung vowels), the same rule as the plugin's Learner::frameVoiced."""
         nf = 4096
         frames = np.lib.stride_tricks.sliding_window_view(self.M, nf)[::nf]
         lv = 10 * np.log10((frames ** 2).mean(1) + 1e-20)
         ok = ~excl_mask(len(frames), nf / SR)
-        keep = frames[(lv > np.percentile(lv[ok], 95) - 25) & ok]
+        sel = (lv > np.percentile(lv[ok], 95) - 25) & ok
         w = np.hanning(nf)
-        P = (np.abs(np.fft.rfft(keep * w, axis=1)) ** 2).mean(0)
         f = np.fft.rfftfreq(nf, 1 / SR)
+        Pf = np.abs(np.fft.rfft(frames[sel] * w, axis=1)) ** 2
+        if voiced:
+            B = np.array([[Pf[i][(f >= c / 2 ** (1 / 6)) & (f <= c * 2 ** (1 / 6))].mean() for c in CENTERS] for i in range(len(Pf))])
+            wgt = np.array(CENTERS, float)
+            share = (B[:, np.array(CENTERS) < 1500] * wgt[np.array(CENTERS) < 1500]).sum(1) / ((B * wgt).sum(1) + 1e-30)
+            Pf = Pf[share >= 0.7]
+        P = Pf.mean(0)
         return norm_curve(band_curve(P, f))
 
     def dynamics(self):
@@ -431,6 +439,7 @@ def main():
     log(f"duration {len(x)/SR:.1f}s, offsets {len(m.offs)}, onsets {len(m.ons)}")
 
     curve = m.target_curve()
+    curve_v = m.target_curve(voiced=True)
     dyn = m.dynamics()
     deess_t = m.deess()
     import importlib.util as _iu
@@ -641,7 +650,7 @@ def main():
         "format": "SunoChainPreset", "version": 3,
         "name": a.name or os.path.splitext(os.path.basename(a.input))[0],
         "source_file": os.path.basename(a.input),
-        "eq": {"target_curve_hz": CENTERS, "target_curve_db": [r1(v) for v in curve],
+        "eq": {"target_curve_hz": CENTERS, "target_curve_db": [r1(v) for v in curve], "target_curve_voiced_db": [r1(v) for v in curve_v], "vowel": True,
                "amount": 1.0, "max_boost_db": 12.0, "max_cut_db": 24.0},
         "dynamics": {"target_crest_db": r1(dyn["crest_db"]), "target_spread400_db": r1(dyn["spread400_db"]), "default_total_gr_db": 6.0,
                      "comp1": {"ratio": 4.0, "attack_ms": 2.0, "release_ms": 50.0, "share": 0.55},

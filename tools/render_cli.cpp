@@ -71,6 +71,9 @@ int main (int argc, char** argv)
     B ("eqExact", p.eqExact); B ("hasSibTarget", p.hasSibTarget); B ("comp1Punch", p.comp1Punch); F ("punch", p.punch); F ("attackScale", p.attackScale); B ("sibCeiling", p.sibCeiling); F ("excAmount", p.excAmount); F ("excAdb", p.excAdb); F ("excBdb", p.excBdb); F ("airDb", p.airDb); F ("crispDepth", p.crispDepth); F ("eqAirMul", p.eqAirMul); B ("rideOn", p.rideOn); F ("rideRangeDb", p.rideRangeDb); F ("rideAmount", p.rideAmount); F ("rideSpeedMs", p.rideSpeedMs); F ("lookaheadMs", p.lookaheadMs); F ("wetMudDb", p.wetMudDb); F ("wetAirDb", p.wetAirDb); F ("onsetNarrowDb", p.onsetNarrowDb); F ("onsetNarrowMs", p.onsetNarrowMs); F ("rt60HighMul", p.rt60HighMul); F ("optoRatioPer", p.optoRatioPer); B ("useExciter", p.useExciter); if (kv.count ("listenMode")) p.listenMode = (int) toFloat ("listenMode", kv["listenMode"]); if (kv.count ("reverbMode")) p.reverbMode = (int) toFloat ("reverbMode", kv["reverbMode"]); B ("deessRelDetect", p.deessRelDetect); F ("freezeHfDb", p.freezeHfDb); F ("voicedShare", p.voicedShare); F ("optoFastRelMs", p.optoFastRelMs); F ("optoSlowRelMs", p.optoSlowRelMs); F ("optoThrDb", p.optoThrDb); F ("optoRatioPer", p.optoRatioPer); F ("peakScale", p.peakScale); F ("levelerScale", p.levelerScale); F ("speedScale", p.speedScale); B ("duckRelative", p.duckRelative); F ("duckRelStartDb", p.duckRelStartDb); F ("duckRelRangeDb", p.duckRelRangeDb); F ("xoverLowHz", p.xoverLowHz); F ("xoverHighHz", p.xoverHighHz);
     auto A3 = [&] (const char* k, std::array<float, 3>& dst) { known.insert (k); if (kv.count (k)) { auto v = parseList (k, kv[k]); if (v.size() != 3) fail (std::string ("parameter ") + k + ": needs 3 values"); for (int i = 0; i < 3 && i < (int) v.size(); ++i) dst[(size_t) i] = v[(size_t) i]; } };
     A3 ("revBandDb", p.revBandDb); A3 ("layerBandDb", p.layerBandDb); A3 ("delayBandDb", p.delayBandDb); F ("deessDetLoDb", p.deessDetLoDb); F ("deessDetSpanDb", p.deessDetSpanDb);
+    known.insert ("targetCurveV");
+    if (kv.count ("targetCurveV")) { auto v = parseList ("targetCurveV", kv["targetCurveV"]); if ((int) v.size() != sc::kNumBands) fail ("targetCurveV needs " + std::to_string (sc::kNumBands) + " values"); for (int i = 0; i < sc::kNumBands; ++i) p.targetCurveV[i] = v[i]; p.hasTargetV = true; }
+    B ("eqVowel", p.eqVowel);
     if (kv.count ("targetCurve")) { auto v = parseList ("targetCurve", kv["targetCurve"]); if ((int) v.size() != sc::kNumBands) fail ("targetCurve needs " + std::to_string (sc::kNumBands) + " values"); for (int i = 0; i < sc::kNumBands && i < (int) v.size(); ++i) p.targetCurve[i] = v[i]; p.hasTarget = true; }
 
     for (auto& e : kv) if (! known.count (e.first)) fail ("unknown parameter '" + e.first + "' (typo?)");
@@ -143,6 +146,10 @@ int main (int argc, char** argv)
             std::fprintf (stderr, "chain effect:"); for (float c : p.chainEffect) std::fprintf (stderr, " %.1f", c); std::fprintf (stderr, "\n");
             auto corr = sc::computeCorrection (p);
             std::fprintf (stderr, "correction:"); for (float c : corr) std::fprintf (stderr, " %.1f", c); std::fprintf (stderr, "\n");
+        }
+        {
+            std::array<float, sc::kNumBands> cv {}, ov {};
+            if (chain.learner.summariseVoiced (cv, ov)) { p.sourceCurveV = cv; p.chainEffectV = sc::Learner::chainEffectFrom (cv, ov, applied); p.hasSourceV = p.hasChainEffectV = true; }
         }
         std::array<float, 10> sc10 {}; int ns = chain.learner.sib.summarise (sc10);
         if (ns >= 3 && ! kv.count ("sibSource")) { p.sibSource = sc10; p.hasSibSource = true; }

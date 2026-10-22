@@ -39,6 +39,10 @@ struct Params
     // match EQ: target curve comes from the preset, source curve from Learn
     // dB, normalised (mean of 250..4k bands = 0). Default = built-in "Suno Lead 01" so the plugin works without a preset file.
     std::array<float, kNumBands> targetCurve { -9.5f, -12.15f, -3.46f, -5.82f, -5.68f, 1.45f, 2.05f, 10.47f, 8.17f, 2.0f, 4.1f, 6.42f, 5.04f, 1.04f, 1.17f, -1.92f, -6.03f, -7.82f, -9.97f, -12.68f, -20.1f, -16.94f, -19.72f, -16.91f, -21.3f, -32.19f };
+    // v2.1 VOWEL EQ: the same curves measured on sung vowels only (frames whose energy is >= 70 % under 1.5 kHz).
+    // The Match EQ then matches your vowels to Suno's vowels; sibilants stay with the S/Z Match.
+    std::array<float, kNumBands> targetCurveV {}, sourceCurveV {}, chainEffectV {};
+    bool hasTargetV = false, hasSourceV = false, hasChainEffectV = false, eqVowel = false;
     std::array<float, kNumBands> sourceCurve {};   // dB, from Learn
     std::array<float, kNumBands> chainEffect {};   // dB, from Learn (v1.5): what the rest of the chain does to the spectrum
     bool  hasChainEffect = false;
@@ -363,7 +367,11 @@ inline std::array<float, kNumBands> computeCorrection (const Params& p)
     std::array<float, kNumBands> d {};
     if (! (p.hasTarget && p.hasSource)) return d;
     std::array<float, kNumBands> raw {};
-    for (int i = 0; i < kNumBands; ++i) raw[i] = p.targetCurve[i] - p.sourceCurve[i] - (p.hasChainEffect ? p.chainEffect[i] : 0.0f);
+    const bool vowelMode = p.eqVowel && p.hasTargetV && p.hasSourceV;
+    if (vowelMode)   // v2.1 VOWEL EQ
+        for (int i = 0; i < kNumBands; ++i) raw[i] = p.targetCurveV[i] - p.sourceCurveV[i] - (p.hasChainEffectV ? p.chainEffectV[i] : 0.0f);
+    else
+        for (int i = 0; i < kNumBands; ++i) raw[i] = p.targetCurve[i] - p.sourceCurve[i] - (p.hasChainEffect ? p.chainEffect[i] : 0.0f);
     for (int i = 0; i < kNumBands; ++i)   // light 3-band smoothing
     {
         float s = raw[i] * 2.0f, w = 2.0f;
@@ -376,7 +384,9 @@ inline std::array<float, kNumBands> computeCorrection (const Params& p)
         const float fc = bandCenters()[i];
         // v1.12 air: by ear the top needed MATCH EQ 150 % to sound like Suno (the S/Z Match and the closed loop
         // eat part of the lift there). Boosts get x1.5 from 8 kHz up, ramping from 4 kHz.
-        if (v > 0 && fc > 4000.0f) v *= 1.0f + 0.5f * std::clamp ((float) std::log2 (fc / 4000.0f), 0.0f, 1.0f) * p.eqAirMul;
+        // v2.1: not in VOWEL EQ mode. That x1.5 was found by ear while the EQ matched the full spectrum (vowels + the
+        // sibilants' highs, which the S/Z Match then takes back); matched on vowels it would overshoot by 4-7 dB at 6-8 kHz.
+        if (v > 0 && fc > 4000.0f && ! vowelMode) v *= 1.0f + 0.5f * std::clamp ((float) std::log2 (fc / 4000.0f), 0.0f, 1.0f) * p.eqAirMul;
         if (fc < 120.0f)      v = std::min (v, 0.0f);
         else if (fc < 300.0f) v = v > 0.0f ? v * p.eqLowWeight : v;
         d[i] = std::clamp (v, -p.eqMaxCutDb, fc >= 6000.0f ? std::max (p.eqMaxBoostDb, p.eqMaxBoostHighDb) : p.eqMaxBoostDb);
@@ -1160,6 +1170,37 @@ struct Learner
         return e;
     }
 
+    // v2.1: a sung vowel = at least 70 % of the frame's energy under 1.5 kHz (band powers are per-bin means: x fc)
+    static bool frameVoiced (const float* bands)
+    {
+        double lo = 0, all = 0; const auto& fc = bandCenters();
+        for (int b = 0; b < kNumBands; ++b) { const double e = std::pow (10.0, bands[b] / 10.0) * fc[(size_t) b]; all += e; if (fc[(size_t) b] < 1500.0f) lo += e; }
+        return all > 0 && lo >= 0.7 * all;
+    }
+    // v2.1: input / output spectra over the loud VOWEL frames only (the VOWEL EQ's source curve and closed loop)
+    bool summariseVoiced (std::array<float, kNumBands>& curve, std::array<float, kNumBands>& outCurve) const
+    {
+        const int nf = nFrames.load();
+        if (nf < 20) return false;
+        std::vector<float> lv (frameLevel.begin(), frameLevel.begin() + nf);
+        auto sorted = lv; std::sort (sorted.begin(), sorted.end());
+        const float p95 = sorted[(size_t) (0.95 * (nf - 1))];
+        std::array<double, kNumBands> acc {}, accOut {}; int used = 0;
+        for (int f = 0; f < nf; ++f)
+        {
+            if (lv[(size_t) f] < p95 - 25 || ! frameVoiced (&frameBands[(size_t) f * kNumBands])) continue;
+            for (int b = 0; b < kNumBands; ++b)
+            {
+                acc[b] += std::pow (10.0, frameBands[(size_t) f * kNumBands + b] / 10.0);
+                accOut[b] += std::pow (10.0, frameBandsOut[(size_t) f * kNumBands + b] / 10.0);
+            }
+            ++used;
+        }
+        if (used < 10) return false;
+        for (int b = 0; b < kNumBands; ++b) { curve[b] = (float) (10 * std::log10 (acc[b] / used + 1e-30)); outCurve[b] = (float) (10 * std::log10 (accOut[b] / used + 1e-30)); }
+        normaliseCurve (curve); normaliseCurve (outCurve);
+        return true;
+    }
     // message thread: summarise. Returns false if not enough material.
     // outCurve (optional): normalised spectrum of the plugin's output over the same frames
     bool summarise (std::array<float, kNumBands>& curve, float& levelDb, float& crestDb, float& spreadDb,

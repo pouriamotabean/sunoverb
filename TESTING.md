@@ -26,9 +26,9 @@ Exit code 0 = everything passed. `--only presets,state,...` runs single suites, 
 |---|---|
 | `solver` | the fast EXACT EQ solver gives the same gains as the reference implementation (`tests/reference`) and hits every test curve (incl. the report's "Suno Male vs a flat voice") within 0.05 dB at 44.1 / 48 / 96 kHz; LEGACY error printed for comparison |
 | `guard` | SIBILANT GUARD: one sibilant made 14 dB louder than the others is pulled down (> 3 dB above 3 kHz), every other sibilant changes < 0.3 dB (dry path), a take without an outlier sounds the same with and without the guard |
-| `presets` | every embedded factory preset parses, validates, learns (x2), matches loudness and renders with the EXACT solver (golden `exact_*`) and with LEGACY (must equal v2.0: golden `preset_*` / `black_*`) a synthetic vocal (SUNO and BLACK): finite, peak <= +0.5 dBFS, not silent, WIDTH meter has data; metrics compared with the golden file; 5 broken presets are rejected and leave the session untouched |
+| `presets` | every embedded factory preset parses, validates, learns (x2), matches loudness and renders with the VOWEL EQ (golden `vowel_*`, v2.1), with the EXACT solver on the full spectrum (golden `exact_*`, = v2.0.4) and with LEGACY (must equal v2.0: golden `preset_*` / `black_*`) a synthetic vocal (SUNO and BLACK): finite, peak <= +0.5 dBFS, not silent, WIDTH meter has data; metrics compared with the golden file; 5 broken presets are rejected and leave the session untouched |
 | `sync` | the presets embedded in the plugin are identical to `presets/*.json` and every file is embedded |
-| `state` | save -> new instance -> restore gives the identical state and a bit-identical render; prepareToPlay resets everything (same session renders identically twice); the stored v2.0 session (`tests/data`) restores and matches its golden render; sessions / presets from before BREATH load with BREATH off; random bytes, truncated / empty data, broken JSON, NaN / Inf / 1e30 values, wrong array lengths and a foreign XML never crash and never leave NaN or out-of-range parameters |
+| `state` | save -> new instance -> restore gives the identical state and a bit-identical render; prepareToPlay resets everything (same session renders identically twice); the stored v2.0 session (`tests/data`) restores and matches its golden render; sessions / presets from before BREATH / the EXACT solver / the SIBILANT GUARD / the VOWEL EQ load with it off; saved presets keep the VOWEL EQ switch; random bytes, truncated / empty data, broken JSON, NaN / Inf / 1e30 values, wrong array lengths and a foreign XML never crash and never leave NaN or out-of-range parameters |
 | `realtime` | 44.1 / 48 / 88.2 / 96 kHz x blocks 32-512 (random sizes up to the maximum) x stereo, mono->stereo, mono; all effects on, automation every block, BLACK and FREEZE toggled during playback: zero allocations inside `processBlock` (counted by a replaced `operator new`), no NaN, average load reported and checked |
 | `concurrent` | while an audio thread runs: presets loaded, sessions restored, Learn and Match Loudness started / stopped, knobs moved, state saved, meters read from the "message thread": no NaN, no allocation on the audio thread |
 | `latency` | the reported latency equals the measured delay (cross-correlation) at 44.1 and 96 kHz |
@@ -37,7 +37,7 @@ Exit code 0 = everything passed. `--only presets,state,...` runs single suites, 
 
 Golden file: `tests/golden/golden.txt`. The `preset_*`, `black_*` and `session_v2_0` entries were generated from
 v2.0 (LEGACY EQ solver, before any v2.0.1 change); v2.0.2 reproduces them bit-exactly with GCC (`--tol 0`). The
-`exact_*` entries were generated with v2.0.2 (EXACT solver). Across compilers (MSVC in CI) small float differences
+`exact_*` entries were generated with v2.0.2 (EXACT solver); the `vowel_*` entries with v2.1.0 (VOWEL EQ). Across compilers (MSVC in CI) small float differences
 are expected, hence `--tol 1.0` there. Regenerate only for an intended sound change, together with an A/B render and
 a note in the README.
 

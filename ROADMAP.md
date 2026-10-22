@@ -1,6 +1,6 @@
 # Suno Chain – Roadmap
 
-Current version: **v2.0.4** (female presets, SIBILANT GUARD). v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
+Current version: **v2.1.0** (VOWEL EQ). v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
 
 ## 1. Next steps (in order)
 1. **Pouria tests v2.0** on his own and other vocals; all sound / GUI issues reported at once and fixed in one release.
@@ -17,8 +17,8 @@ Current version: **v2.0.4** (female presets, SIBILANT GUARD). v2.0.3: Windows in
      Full version later: reverb, width, dirty-stem cleaning with a colored waveform (see section 4).
 
 ## 2. Open issues (must fix)
-- **EXACT EQ by ear**: Pouria A/Bs the factory presets (LEGACY vs EXACT); if the air / 5 kHz is now too bright,
-  re-tune eqAirMul / the max high boost by ear with EXACT.
+- ~~**EXACT EQ by ear**: "a little sharper"~~ measured and addressed in v2.1.0 (VOWEL EQ; waiting for Pouria's ear).
+  If 10 kHz now sounds too dull (measured -2.5 dB vs Suno vowels), raise AIR first.
 - ~~Female vocal: one harsh "sh"~~ addressed in v2.0.4 (female presets + SIBILANT GUARD; waiting for Pouria's ear).
 - (was) **Female vocal: one harsh "sh"** (Pouria's first test on a female voice, v1.15.2; everything else was fine).
   Waiting for the dry + wet clip, the preset name and the timestamp. Suspects: the S/Z detector and de-esser bands
