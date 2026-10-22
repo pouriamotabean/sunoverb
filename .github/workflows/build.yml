@@ -62,7 +62,7 @@ jobs:
           $log | ForEach-Object { echo $_ }
           if ($code -ne 0) {
             # GitHub keeps only 10 annotations per step: the error lines first, then the very end of the log
-            $err = @($log | Where-Object { "$_" -match 'rror|Line \d+|Column|Unknown|Invalid|not found' }) + @($log | Select-Object -Last 3)
+            $err = @($log | Where-Object { "$_" -cmatch 'Error|Compile aborted|Warning' }) + @($log | Select-Object -Last 3)
             $err | Select-Object -First 9 | ForEach-Object { echo "::error::ISCC: $_" }
             exit 1
           }
