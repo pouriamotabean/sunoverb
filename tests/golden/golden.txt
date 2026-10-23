@@ -42,3 +42,13 @@ vowel_Suno_Female.json -16.824 -22.803 -18.333 -30.685 -15.579 -1.572 d5dd33bbdb
 vowel_Suno_Lead_Reference.json -22.469 -29.767 -23.608 -35.986 -15.452 -5.907 730fd99678ac14b5
 vowel_Suno_Male.json -17.645 -25.749 -18.637 -30.701 -15.772 -0.945 d94ae6a5eac8f68c
 vowel_Velvet_Male.json -17.317 -24.139 -18.518 -32.028 -18.138 -0.918 142e050c843c52e7
+wenv_Black_Female.json -16.831 -22.806 -18.341 -30.680 -15.221 -1.597 5178dc6db23ac9ce
+wenv_Black_Male.json -17.685 -25.789 -18.678 -30.736 -15.222 -0.875 3627cc2337bb6795
+wenv_Blue_Male.json -17.073 -24.857 -18.251 -28.568 -14.142 -1.237 5f0acb16aa10f344
+wenv_Dreamy_Male.json -17.845 -25.950 -18.836 -30.916 -12.906 -1.111 bf3d1e6f5bb6e222
+wenv_Pouria_Signature.json -17.534 -26.145 -18.442 -30.454 -15.405 -0.929 8efe683ba3264079
+wenv_Radio_Male.json -17.823 -27.058 -18.658 -30.359 -15.433 -0.832 3a1cdd93d2a3ab53
+wenv_Suno_Female.json -16.829 -22.808 -18.338 -30.691 -15.337 -1.561 3ccf6bf031814771
+wenv_Suno_Lead_Reference.json -22.470 -29.769 -23.609 -35.987 -15.436 -5.892 66f83681965ba39b
+wenv_Suno_Male.json -17.628 -25.732 -18.620 -30.684 -15.386 -0.929 1d9cb6b29cd9fd39
+wenv_Velvet_Male.json -17.325 -24.147 -18.527 -32.036 -17.810 -0.938 9b8e19380234b59c

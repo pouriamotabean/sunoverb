@@ -105,6 +105,15 @@ struct Params
     float widthHpf = 200.0f, widthLpf = 16000.0f;
     float widthBloomDb = 12.0f, widthBloomMs = 200.0f;   // layer starts lower at phrase starts (measured in Suno)
     float widthMotion = 0.0f;           // 0 = constant (Suno), 1 = only on held notes
+    // v2.2 WIDTH ENVELOPE: in Suno the side/mid ratio rises as the voice gets quieter inside a phrase (syllable
+    // tails, soft words: +7 dB at 9-15 dB under the phrase peak, male 150 Hz-4 kHz); ours stayed constant.
+    // Gain of the width layer per band (<1k / 1-4k / >4k) by how far the voice is under its phrase peak, from the
+    // preset: the rise of Suno's voice-coherent side (side that follows the voice = what our layer is) per level bin,
+    // re the loudest bin. Our layer alone is constant (+-0.5 dB over the bins), so that rise is the gain. The reverb
+    // part needs nothing: ours already rises with the same slope as Suno's (tails).
+    float widthEnvAmount = 0.0f;        // 0 = off (before v2.2), 1 = 100 %
+    std::array<float, 15> widthEnvGainDb {};   // [band * 5 + bin], dB
+    bool hasWidthEnvGain = false;
 
     // multiband width (v1.3): gain on the Side signal of each source in three bands (Linkwitz-Riley 4th order,
     // the bands sum flat). Mid and mono stay untouched. dB, 0 = unchanged.
@@ -797,6 +806,46 @@ struct SideBands
         float mid = lp2B.process (lp2A.process (hi, ch), ch);
         float top = hp2B.process (hp2A.process (hi, ch), ch);
         return g[0] * lo + g[1] * mid + g[2] * top * topMul;
+    }
+};
+
+//==============================================================================
+// v2.2 WIDTH ENVELOPE. Detector: level of the output mid (150 Hz - 4 kHz, 30 ms) and a phrase peak reference
+// (follows peaks at once, falls 1 dB/s while singing, holds in pauses); d = reference - level. The layer gain per
+// band is interpolated over 5 level bins. The same detector and bins are in tools/suno_analyze.py (preset data).
+struct WidthEnvelope
+{
+    static constexpr int kBins = 5, kTick = 32;
+    static constexpr float edges[kBins + 1] { 0.0f, 5.0f, 9.5f, 15.5f, 24.5f, 40.0f };
+    static constexpr float nodes[kBins] { 2.5f, 7.25f, 12.5f, 20.0f, 32.0f };
+    static int binOf (float d) { for (int k = 0; k < kBins; ++k) if (d >= edges[k] && d < edges[k + 1]) return k; return -1; }
+    Biquad dHp, dLp; float env = 0, envC = 0, ref = -200.0f, refFall = 0, d = 40.0f; int tick = 0;
+    void prepare (double fs)
+    {
+        dHp.setHPF (fs, 150.0); dLp.setLPF (fs, 4000.0); dHp.reset(); dLp.reset();
+        envC = msToCoef (30.0f, fs); env = 0; ref = -200.0f; d = 40.0f; tick = 0;
+        refFall = (float) (1.0 * kTick / fs);   // 1 dB/s
+    }
+    // per sample: mid = output mid (previous sample is fine), returns true every kTick samples (d updated)
+    inline bool detect (float mid)
+    {
+        const float x = dLp.process (dHp.process (mid, 0), 0);
+        env = envC * env + (1 - envC) * x * x;
+        if (++tick < kTick) return false;
+        tick = 0;
+        const float lvl = 10.0f * std::log10 (env + 1e-12f);
+        if (lvl > ref) ref = lvl;
+        else if (lvl > ref - 30.0f) ref -= refFall;
+        d = std::clamp (ref - lvl, 0.0f, 40.0f);
+        return true;
+    }
+    static float gainAt (const std::array<float, 15>& g, int band, float d)
+    {
+        const float* t = g.data() + band * kBins;
+        if (d <= nodes[0]) return t[0];
+        for (int k = 0; k < kBins - 1; ++k)
+            if (d < nodes[k + 1]) return t[k] + (t[k + 1] - t[k]) * (d - nodes[k]) / (nodes[k + 1] - nodes[k]);
+        return t[kBins - 1];
     }
 };
 
@@ -1745,6 +1794,7 @@ public:
     BreathControl breath;
     MicroWidth widthLayer;
     SideBands revSB, layerSB, delaySB;
+    SideBands envSB; WidthEnvelope wEnv; float lastOutMid = 0; bool wEnvOn = false;   // v2.2 WIDTH ENVELOPE
     Learner learner;
     WidthMeter widthMeter;   // output width per band (WIDTH graph); v2.0.1: runs on the message thread (pumpMeters)
     StereoFifo meterFifo;    // audio thread -> widthMeter
@@ -1788,6 +1838,7 @@ public:
         voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs); blk.prepare (fs); breath.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
         revSB.prepare (fs); layerSB.prepare (fs); delaySB.prepare (fs);
+        envSB.prepare (fs); wEnv.prepare (fs); lastOutMid = 0;
         widthMeter.prepare (fs, 8.0); meterFifo.allocate ((size_t) fs);   // 1 s of headroom between editor timer ticks
         loud.prepare (fs);
         for (auto& m : mWidthBands) m = -100.0f;
@@ -1972,6 +2023,8 @@ public:
         widthLayer.set (p, amt);
         revSB.set (p.xoverLowHz, p.xoverHighHz, p.reverbMode == 1 ? p.blackBandDb : p.revBandDb);
         layerSB.set (p.xoverLowHz, p.xoverHighHz, p.layerBandDb);
+        envSB.set (1000.0f, 4000.0f, { 0, 0, 0 });
+        wEnvOn = p.widthEnvAmount > 0.001f && p.hasWidthEnvGain && p.widthOn;
         delaySB.set (p.xoverLowHz, p.xoverHighHz, p.delayBandDb);
 
         duckEnvCoef = msToCoef (10.0f, fs);
@@ -2075,6 +2128,13 @@ public:
             float mono = 0.5f * (l + r);
             // width layer: side only, follows the dry vocal (not ducked)
             float ws = layerSB.process (widthLayer.process (mono));
+            if (wEnvOn)
+            {
+                if (wEnv.detect (lastOutMid))
+                    for (int b = 0; b < 3; ++b)
+                        envSB.gT[(size_t) b] = dbToGain (std::clamp (WidthEnvelope::gainAt (p.widthEnvGainDb, b, wEnv.d) * p.widthEnvAmount, -12.0f, 18.0f));
+                ws = envSB.process (ws);
+            }
             {   // v1.13 note-onset envelope on the layer's highs: narrow at the start of each note, opening over ~60 ms
                 const float e2 = mono * mono;
                 onFast = onFastC * onFast + (1 - onFastC) * e2; onSlow = onSlowC * onSlow + (1 - onSlowC) * e2;
@@ -2133,6 +2193,7 @@ public:
             L[i] = l * outGain;
             if (R) R[i] = r * outGain;
             if (learnOn) learner.push (rawMono, 0.5f * (l + r));
+            lastOutMid = 0.5f * (l + r);   // v2.2 detector input (one sample late)
             pkOut = std::max (pkOut, std::max (std::abs (L[i]), R ? std::abs (R[i]) : 0.0f));
         }
         mDelayMs = dlyMs; mDeess = maxDs;

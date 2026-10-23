@@ -303,5 +303,26 @@
   "air_db": 5.0,
   "breath": 40.0
  },
- "description": "Neutral reference: your voice like the Suno male vocals, SUNO reverb."
+ "description": "Neutral reference: your voice like the Suno male vocals, SUNO reverb.",
+ "width_env": {
+  "amount": 1.0,
+  "gain_db": [
+   0.0,
+   6.9,
+   12.0,
+   12.0,
+   12.0,
+   0.0,
+   0.0,
+   4.4,
+   6.6,
+   6.6,
+   0.0,
+   0.0,
+   0.0,
+   2.7,
+   9.6
+  ],
+  "note": "v2.2 WIDTH ENVELOPE: width layer gain (dB) per band (<1k, 1-4k, >4k) x level bin (0-5, 5-9.5, 9.5-15.5, 15.5-24.5, 24.5-40 dB under the phrase peak). Fitted (closed loop, tools/width_env.py side_energies) so the side-minus-mid rise over the bins follows 5 Suno female lead stems; only opening (monotone), max +12 dB."
+ }
 }

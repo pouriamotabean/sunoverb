@@ -736,5 +736,26 @@
   "air_db": 7.0,
   "breath": 40.0
  },
- "description": "Close, clean and bright: short low SUNO reverb, no echo. Verses, a vocal that sits in front."
+ "description": "Close, clean and bright: short low SUNO reverb, no echo. Verses, a vocal that sits in front.",
+ "width_env": {
+  "amount": 1.0,
+  "gain_db": [
+   0.0,
+   7.2,
+   12.0,
+   12.0,
+   12.0,
+   0.0,
+   8.7,
+   12.0,
+   12.0,
+   12.0,
+   0.0,
+   0.0,
+   0.0,
+   12.0,
+   12.0
+  ],
+  "note": "v2.2 WIDTH ENVELOPE: width layer gain (dB) per band (<1k, 1-4k, >4k) x level bin (0-5, 5-9.5, 9.5-15.5, 15.5-24.5, 24.5-40 dB under the phrase peak). Fitted (closed loop, tools/width_env.py side_energies) so the side-minus-mid rise over the bins follows 4 Suno male lead stems; only opening (monotone), max +12 dB."
+ }
 }

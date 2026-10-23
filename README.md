@@ -1,4 +1,4 @@
-# Suno Chain v2.1.0
+# Suno Chain v2.2.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,22 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.2.0 (WIDTH ENVELOPE)
+- Measured on the Suno stems: inside a phrase the vocal gets much wider as it gets quieter (syllable tails, soft
+  words). Side minus mid, 150 Hz - 1 kHz, male: -13 dB on the loudest parts, -10 dB at 4-8 dB under them, -4.5 dB at
+  8-14 dB under. Ours stayed nearly constant (-15 / -15 / -14 dB): the width layer simply followed the voice.
+- **WIDTH ENVELOPE** (new host parameter "Width Envelope" 0-150 %, 100 % for new sessions and the factory presets,
+  0 % = off for older sessions / presets): a detector follows the output level against the phrase peak and opens the
+  width layer per band (<1 kHz, 1-4 kHz, >4 kHz) as the voice falls under it. The loud parts keep the by-ear layer
+  level. Mono is untouched (the layer is side only).
+- Presets: `width_env.gain_db` (3 bands x 5 level bins), fitted in a closed loop with the real plugin code so the
+  side-minus-mid rise follows 4 male / 5 female Suno lead stems; only opening, max +12 dB (`tools/width_env.py`).
+- Result (150 Hz - 1 kHz, the same three level ranges): male -14.0 / -11.6 / -8.5 dB (was -15.4 / -14.9 / -13.8;
+  Suno -13.3 / -9.9 / -4.5), also on a take that was not used for the fit; female -12.7 / -10.3 / -9.1 dB (was
+  -15.1 / -14.8 / -13.3; Suno -14.9 / -10.8 / -6.1). The rest of the gap is the reverb level (calibrated by ear).
+- Older sessions and presets: bit-identical (tests: golden `vowel_*`, `exact_*`, `preset_*`, `black_*` unchanged;
+  new `wenv_*`).
+
 ## v2.1.0 (VOWEL EQ: the "slightly sharper" top fixed)
 - Pouria heard v2.0.2+ "a little sharper". Measured on his takes: the vowels came out 4-8 dB brighter than Suno's
   vowels at 6-8 kHz (male +2.5 / +4.8 dB, female +7.7 / +6.8 dB at 6.3 / 8 kHz). Cause: the Match EQ target was the

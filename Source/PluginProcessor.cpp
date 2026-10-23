@@ -205,6 +205,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     // v2.1: VOWEL EQ (the Match EQ compares your vowels with Suno's vowels; sibilants stay with the S/Z Match).
     // On for new sessions and the factory presets; off for sessions / presets saved before v2.1 (their sound).
     p.push_back (std::make_unique<APB> (juce::ParameterID { "eqVowel", 13 }, "Vowel EQ", true));
+    // v2.2: WIDTH ENVELOPE (the width layer opens as the voice gets quieter inside a phrase, like Suno). 100 % for
+    // new sessions and the factory presets; 0 % (off) for sessions / presets saved before v2.2 (their sound).
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "widthEnv", 14 }, "Width Envelope", NRange (0, 150), 100.0f, pct));
     return { p.begin(), p.end() };
 }
 
@@ -245,7 +248,8 @@ void SunoChainProcessor::installFactoryPresets()
         juce::var onDisk, current;
         if (juce::JSON::parse (f.loadFileAsString(), onDisk).failed() || juce::JSON::parse (text, current).failed()) continue;
         if (! onDisk.isObject() || ! current.isObject()) continue;
-        static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" }, { "eq", "vowel" }, { "eq", "target_curve_voiced_db" } };
+        static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" }, { "eq", "vowel" }, { "eq", "target_curve_voiced_db" },
+                                          { "width_env", "amount" }, { "width_env", "gain_db" } };
         bool missing = false;
         for (auto& a : added)
         {
@@ -280,6 +284,7 @@ static bool validatePreset (const juce::var& json, juce::String& error, bool str
     if (! arr (json["eq"]["target_curve_db"], sc::kNumBands, strict, "EQ target curve")) return false;
     if (! arr (json["eq"]["target_curve_hz"], sc::kNumBands, false, "EQ frequency list")) return false;
     if (! arr (json["eq"]["target_curve_voiced_db"], sc::kNumBands, false, "vowel EQ target curve")) return false;
+    if (! arr (json["width_env"]["gain_db"], 15, false, "width envelope")) return false;
     if (! arr (json["deesser"]["sib_curve_db"], 10, false, "S/Z curve")) return false;
     for (auto* sec : { "reverb", "delay", "width_layer" })
         if (! arr (json[sec]["band_width_db"], 3, false, "width per band")) return false;
@@ -330,6 +335,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.eqExact = v ("eqExact") > 0.5f;
     p.sibGuard = v ("sibGuard") > 0.5f;
     p.eqVowel = v ("eqVowel") > 0.5f;
+    p.widthEnvAmount = v ("widthEnv") / 100.0f;
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -489,6 +495,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
         set ("eqExact", json["eq"]["solver"].toString() == "exact" ? 1.0 : 0.0);
         set ("sibGuard", num (json, "deesser.guard", 0.0));
         set ("eqVowel", num (json, "eq.vowel", 0.0));   // v2.1: older presets without it keep their sound
+        set ("widthEnv", num (json, "width_env.amount", 0.0) * 100.0);   // v2.2: likewise
     dirty = true;
     return true;
 }
@@ -509,6 +516,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         for (auto v : hidden.targetCurve) curve.add (v);
         put (j, "eq.target_curve_db", curve);
         if (hidden.hasTargetV) put (j, "eq.target_curve_voiced_db", toVarArray (hidden.targetCurveV));
+        if (hidden.hasWidthEnvGain) put (j, "width_env.gain_db", toVarArray (hidden.widthEnvGainDb));
         put (j, "dynamics.target_crest_db", hidden.targetCrestDb);
         put (j, "dynamics.target_spread400_db", hidden.targetSpreadDb);
         put (j, "dynamics.leveler_factor", hidden.levelerFactor);
@@ -551,6 +559,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "width_layer.level_db", v ("wLevel"));
     put (j, "width_layer.tilt_db", v ("wTone"));
     put (j, "width_layer.motion", v ("wMotion") / 100.0);
+    put (j, "width_env.amount", v ("widthEnv") / 100.0);
     put (j, "reverb.band_width_db", toVarArray (std::array<float, 3> { (float) v ("rwLow"), (float) v ("rwMid"), (float) v ("rwHigh") }));
     put (j, "width_layer.band_db", toVarArray (std::array<float, 3> { (float) v ("lwLow"), (float) v ("lwMid"), (float) v ("lwHigh") }));
     put (j, "delay.band_width_db", toVarArray (std::array<float, 3> { (float) v ("dwLow"), (float) v ("dwMid"), (float) v ("dwHigh") }));
@@ -594,6 +603,11 @@ void SunoChainProcessor::restorePresetFromTree()
         auto cv = j.isObject() ? j["eq"]["target_curve_voiced_db"] : juce::var();
         hidden.hasTargetV = cv.isArray() && cv.size() == sc::kNumBands;
         if (hidden.hasTargetV) for (int i = 0; i < sc::kNumBands; ++i) hidden.targetCurveV[(size_t) i] = juce::jlimit (-100.0f, 100.0f, (float) (double) cv[i]);
+    }
+    {   // v2.2: WIDTH ENVELOPE gains (presets made before v2.2 have none: the envelope stays off)
+        auto we = j.isObject() ? j["width_env"]["gain_db"] : juce::var();
+        hidden.hasWidthEnvGain = we.isArray() && we.size() == 15;
+        if (hidden.hasWidthEnvGain) for (int i = 0; i < 15; ++i) hidden.widthEnvGainDb[(size_t) i] = juce::jlimit (-12.0f, 18.0f, (float) (double) we[i]);
     }
     hidden.eqMaxBoostDb   = (float) num (j, "eq.max_boost_db", 12.0);
     hidden.eqMaxCutDb     = (float) num (j, "eq.max_cut_db", 24.0);
@@ -852,7 +866,7 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             // BREATH arrived in v1.15.1 with a 40 % default: an older session had no breath control at all
             // the EXACT EQ solver arrived in v2.0.2: an older session keeps the LEGACY one (its sound)
             const auto pid = r->getParameterID();
-            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard" || pid == "eqVowel") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
+            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard" || pid == "eqVowel" || pid == "widthEnv") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
             juce::ValueTree c ("PARAM"); c.setProperty ("id", r->getParameterID(), nullptr); c.setProperty ("value", legacy, nullptr);
             state.appendChild (c, nullptr);
             continue;

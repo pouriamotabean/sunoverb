@@ -1,6 +1,6 @@
 # Suno Chain – Roadmap
 
-Current version: **v2.1.0** (VOWEL EQ). v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
+Current version: **v2.2.0** (WIDTH ENVELOPE). v2.1.0: VOWEL EQ. v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
 
 ## 1. Next steps (in order)
 1. **Pouria tests v2.0** on his own and other vocals; all sound / GUI issues reported at once and fixed in one release.
@@ -9,10 +9,12 @@ Current version: **v2.1.0** (VOWEL EQ). v2.0.4: female presets, SIBILANT GUARD. 
 3. ~~Windows installer~~ done in v2.0.3 (Releases page).
 4. ~~LEARN SUNO inside the plugin~~ dropped (Oct 23, 2026): the Python analyzer already gives the same result;
    Pouria builds the preset bank step by step (with Claude) and does the rest with his own edits.
-5. **Next, one at a time** (each: build, measure with the real plugin code, A/B files, Pouria's ear, then release),
+5. **Order changed (Oct 23, 2026)**: 2 and 3 first, because each adds measured data to every preset; then all
+   presets are rebuilt at once and the female Dreamy / Velvet presets added.
+6. **Next, one at a time** (each: build, measure with the real plugin code, A/B files, Pouria's ear, then release),
    and every preset in the bank must keep working with them:
    1. Female **Dreamy** and **Velvet** presets (same method as Suno Female, from the Suno female stems).
-   2. **Width envelope**: the wide layer opens and closes with each syllable like Suno.
+   2. ~~**Width envelope**~~ done in v2.2.0 (waiting for Pouria's ear).
    3. **Syllable compression**: syllables more even, like Suno.
 
 ## 2. Open issues (must fix)

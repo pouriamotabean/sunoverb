@@ -342,11 +342,22 @@ static void suitePresets()
     const double fs = 44100; auto vox = makeVocal (fs, 12.0);
     for (const auto& fp : factory::presets)
     {
-        // VOWEL EQ (what the factory preset asks for since v2.1): its own golden entries
+        // WIDTH ENVELOPE (what the factory preset asks for since v2.2): its own golden entries
+        {
+            Rig w (fs, 256); juce::String err;
+            w.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
+            check (w.get ("widthEnv") == 100.0f, juce::String (fp.file) + ": factory preset uses the WIDTH ENVELOPE");
+            w.learnAndMatch (vox);
+            auto outW = w.run (vox);
+            finiteAndSane (outW, fs, juce::String (fp.file) + " WIDTH ENVELOPE");
+            compareGolden (juce::String ("wenv_") + fp.file, measure (outW, fs, w.p->getLatencySamples()));
+        }
+        // VOWEL EQ without the width envelope (= v2.1): must keep its golden entries
         {
             Rig v (fs, 256); juce::String err;
             v.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (v.get ("eqVowel") == 1.0f, juce::String (fp.file) + ": factory preset uses the VOWEL EQ");
+            v.set ("widthEnv", 0.0f);
             v.learnAndMatch (vox);
             auto outV = v.run (vox);
             finiteAndSane (outV, fs, juce::String (fp.file) + " VOWEL");
@@ -358,7 +369,7 @@ static void suitePresets()
             e.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (e.get ("eqExact") == 1.0f, juce::String (fp.file) + ": factory preset uses the EXACT EQ solver");
             check (e.get ("sibGuard") == 1.0f, juce::String (fp.file) + ": factory preset uses the SIBILANT GUARD");
-            e.set ("eqVowel", 0.0f);
+            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f);
             e.learnAndMatch (vox);
             auto outE = e.run (vox);
             finiteAndSane (outE, fs, juce::String (fp.file) + " EXACT");
@@ -370,7 +381,7 @@ static void suitePresets()
         const bool ok = r.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
         check (ok, juce::String (fp.file) + ": loads (" + err + ")");
         if (! ok) continue;
-        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f);   // = v2.0
+        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f);   // = v2.0
         r.learnAndMatch (vox);
         auto out = r.run (vox);
         finiteAndSane (out, fs, fp.file);
@@ -525,9 +536,19 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             d4.p->setStateInformation (legacy4.getData(), (int) legacy4.getSize());
             check (d4.get ("eqVowel") == 0.0f, "session from before v2.1 restores with the VOWEL EQ off");
         }
+        {
+            Rig d5 (fs, 256);
+            auto x7 = xmlOf (s1);
+            for (auto* e = x7->getFirstChildElement(); e != nullptr; e = e->getNextElement())
+                if (e->getStringAttribute ("id") == "widthEnv") { x7->removeChildElement (e, true); break; }
+            auto legacy5 = blobOf (*x7);
+            d5.p->setStateInformation (legacy5.getData(), (int) legacy5.getSize());
+            check (d5.get ("widthEnv") == 0.0f, "session from before v2.2 restores with the WIDTH ENVELOPE off");
+        }
         Rig fresh (fs, 256);
         check (fresh.get ("eqExact") == 1.0f, "a new instance uses the EXACT EQ solver");
         check (fresh.get ("eqVowel") == 1.0f, "a new instance uses the VOWEL EQ");
+        check (fresh.get ("widthEnv") == 100.0f, "a new instance uses the WIDTH ENVELOPE");
     }
     {   // installed factory presets from v2.0 (no breath entry, never edited) are refreshed; edited copies are not
         auto dir = SunoChainProcessor::presetFolder();
@@ -580,6 +601,19 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
                 Rig e3 (fs, 256); e3.p->loadPresetFile (tmp, er2);
                 check (e3.get ("eqExact") == v, "saved preset keeps the EQ solver (" + juce::String (v, 0) + ")");
             }
+            tmp.deleteFile();
+        }
+        {
+            Rig e6 (fs, 256);
+            auto x8 = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[6].json));
+            if (auto* q = x8.getDynamicObject()) q->removeProperty ("width_env");
+            e6.loadPresetText (juce::JSON::toString (x8), "old_wenv.json", err);
+            check (e6.get ("widthEnv") == 0.0f, "preset without width_env (before v2.2) loads with the WIDTH ENVELOPE off");
+            auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("sct_saved_w.json");
+            Rig e7 (fs, 256); e7.loadPresetText (juce::String::fromUTF8 (factory::presets[6].json), "fac.json", err);
+            e7.set ("widthEnv", 60.0f); juce::String er3; e7.p->savePresetFile (tmp, er3);
+            Rig e8 (fs, 256); e8.p->loadPresetFile (tmp, er3);
+            check (std::abs (e8.get ("widthEnv") - 60.0f) < 0.01f, "saved preset keeps the WIDTH ENVELOPE amount");
             tmp.deleteFile();
         }
         Rig f2 (fs, 256);
