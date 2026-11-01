@@ -2,23 +2,13 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 
-// Suno Chain v1.4 GUI: image faceplate + knobs (made in ChatGPT, see design/), everything that moves or
-// carries text drawn in code. All coordinates are logical (1200 x 800 main view, +366 for the Advanced
+// Suno Chain GUI. v2.6: drawn entirely in code in the style of ReKit 2 (a black device, monochrome + one orange,
+// Inter / Space Mono); v1.4 - v2.5 used an image faceplate. All coordinates are logical (1200 x 800 main view, +366 for the Advanced
 // drawer); the whole UI is scaled as one piece, so it stays sharp and proportional at any size.
 namespace ui
 {
 constexpr int kW = 1200, kH = 800, kSideW = 480;   // Advanced = side module on the right (v1.5)
 
-struct Images
-{
-    juce::Image faceplate, sidePanel, knob, knobLarge, pillLong, pillShort, buttonUp, buttonDown, slot;
-    // v1.14 controls
-    juce::Image toggleUp, toggleDown, glassOff, glassOn, slideLeft, slideRight, flatUp, flatDown, lcd, selRing, selDisc;
-    Images();
-    ~Images();
-    static const Images& get();
-    JUCE_DECLARE_NON_COPYABLE (Images)
-};
 
 class LookAndFeel : public juce::LookAndFeel_V4
 {
@@ -31,7 +21,10 @@ public:
     juce::PopupMenu::Options getOptionsForComboBoxPopupMenu (juce::ComboBox&, juce::Label&) override;
 };
 
-// letter-spaced small caps
+// v2.6: Inter (weights 400 / 500 / 600) and Space Mono, embedded (gui/Fonts.h)
+juce::Font inter (float px, int weight = 400);
+juce::Font mono (float px);
+// the old small caps name, now Inter
 juce::Font capsFont (float size, bool bold = false);
 void drawCaps (juce::Graphics&, const juce::String& text, juce::Rectangle<float> area, juce::Colour, float size,
                juce::Justification = juce::Justification::centred, bool bold = false);
@@ -192,7 +185,6 @@ private:
     void toggleLoudMatch();
     void setAdvanced (bool open);
 
-    juce::SharedResourcePointer<Images> images;   // first member: alive before any child paints, gone with the editor
     SunoChainProcessor& proc;
     LookAndFeel lnf;
     Display display;
