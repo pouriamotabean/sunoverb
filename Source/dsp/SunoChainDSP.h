@@ -120,6 +120,12 @@ struct Params
     float widthEnvAmount = 0.0f;        // 0 = off (before v2.2), 1 = 100 %
     std::array<float, 15> widthEnvGainDb {};   // [band * 5 + bin], dB
     bool hasWidthEnvGain = false;
+    // v2.8 WIDTH TIMING: measured on the Suno stems, a phrase that starts after a pause (>= 100 ms) stays almost mono
+    // for ~200 ms and opens between 200 and 250 ms (female: side -25..-29 dB re mid for 200 ms, then -20); inside a
+    // phrase the width is steady. Ours was wide from the first milliseconds, and the width envelope even widened
+    // the onset (the level is still low while it rises). On: deeper, held phrase-start bloom; the envelope's lift
+    // waits until the syllable has started. false = before v2.8.
+    bool widthTiming = false;
 
     // multiband width (v1.3): gain on the Side signal of each source in three bands (Linkwitz-Riley 4th order,
     // the bands sum flat). Mid and mono stay untouched. dB, 0 = unchanged.
@@ -737,12 +743,15 @@ struct MicroWidth
     // phrase / syllable tracking for bloom and motion
     float envF = 0, envS = 0, cF = 0, cS = 0, silentFor = 1e9f, sinceOnset = 1e9f, gEnv = 1, gCoefUp = 0, gCoefDn = 0;
     float bloomFloor = 1, bloomSamples = 1, motion = 0, phraseAge = 1e9f, pauseLen = 0;
+    bool timing = false; float envScale = 1.0f;   // v2.8: how much of the width envelope's lift may act now (0..1)
+    float pkDb = -200.0f, pkFall = 0.0f;          // v2.8: singing peak (pauses are relative to it)
     void prepare (double s)
     {
         fs = s; bufI.allocate ((int) (0.03 * fs)); bufQ.allocate ((int) (0.03 * fs)); hp.reset(); lp.reset(); tilt.reset(); hil.reset();
         cF = msToCoef (5, fs); cS = msToCoef (80, fs); gCoefUp = msToCoef (60, fs); gCoefDn = msToCoef (25, fs);
         // v2.0.1: running state back to the constructor values (a second prepare starts like the first)
         phA = 0; phB = 0.31; envF = envS = 0; silentFor = sinceOnset = phraseAge = 1e9f; gEnv = 1; pauseLen = 0;
+        pkDb = -200.0f; pkFall = (float) (1.0 / fs); envScale = 1.0f;   // 1 dB/s
     }
     void set (const Params& p, float amt)
     {
@@ -753,6 +762,7 @@ struct MicroWidth
         gain = (p.widthOn && amt > 0) ? dbToGain (p.widthLevelDb) * amt * 1.41421356f : 0.0f;   // two voices -> side
         bloomFloor = dbToGain (-std::max (0.0f, p.widthBloomDb)); bloomSamples = (float) (std::max (1.0f, p.widthBloomMs) * 0.001 * fs);
         motion = std::clamp (p.widthMotion, 0.0f, 1.0f);
+        timing = p.widthTiming;
     }
     // returns the side signal to add (L += s, R -= s)
     inline float process (float mono)
@@ -770,16 +780,32 @@ struct MicroWidth
         float e = mono * mono;
         envF = cF * envF + (1 - cF) * e; envS = cS * envS + (1 - cS) * e;
         float lf = 10 * std::log10 (envF + 1e-12f), ls = 10 * std::log10 (envS + 1e-12f);
-        bool silent = lf < -18.0f - 30.0f;
+        // v2.8 timing: a pause is anything 22 dB under the singing peak (follows peaks at once, falls 1 dB/s while
+        // singing), as in the measurement; before v2.8 only real silence (-48 dBFS) counted
+        if (lf > pkDb) pkDb = lf; else if (lf > pkDb - 30.0f) pkDb -= pkFall;
+        bool silent = timing ? (lf < pkDb - 22.0f || lf < -18.0f - 30.0f) : lf < -18.0f - 30.0f;
         silentFor = silent ? silentFor + 1 : 0;
         if (! silent && lf > ls + 6.0f) sinceOnset = 0; else sinceOnset += 1;
         // bloom: after a pause the layer starts lower and opens over bloomMs. Depth and time scale with
         // the length of the pause (Suno: mono for ~200 ms after real silence, only slightly lower after a breath).
-        if (silent) { if (silentFor > 0.08f * (float) fs) { phraseAge = 0; pauseLen = silentFor; } }
+        if (silent) { if (silentFor > (timing ? 0.1f : 0.08f) * (float) fs) { phraseAge = 0; pauseLen = silentFor; } }
         else phraseAge += 1;
-        float depth = std::min (1.0f, pauseLen / (0.4f * (float) fs));
-        float floorG = std::pow (bloomFloor, depth);
-        float bloom = floorG + (1 - floorG) * std::min (1.0f, phraseAge / (bloomSamples * (1.0f + depth)));
+        float bloom;
+        if (timing)
+        {   // v2.8: any pause >= 100 ms -> held almost mono for 170 ms, opening over 80 ms (smooth)
+            const float o = std::clamp ((phraseAge - 0.17f * (float) fs) / (0.08f * (float) fs), 0.0f, 1.0f);
+            const float sm = o * o * (3.0f - 2.0f * o);
+            bloom = bloomFloor + (1 - bloomFloor) * sm;
+            const float onsetOpen = std::clamp ((sinceOnset - 0.03f * (float) fs) / (0.05f * (float) fs), 0.0f, 1.0f);
+            envScale = sm * onsetOpen;   // the envelope's lift waits for the bloom and for the syllable to have started
+        }
+        else
+        {
+            float depth = std::min (1.0f, pauseLen / (0.4f * (float) fs));
+            float floorG = std::pow (bloomFloor, depth);
+            bloom = floorG + (1 - floorG) * std::min (1.0f, phraseAge / (bloomSamples * (1.0f + depth)));
+            envScale = 1.0f;
+        }
         // motion: on held notes only (opens ~150 ms after the last syllable onset)
         float held = std::clamp ((sinceOnset - 0.05f * (float) fs) / (0.15f * (float) fs), 0.0f, 1.0f);
         float target = bloom * (1 - motion + motion * held);
@@ -2146,6 +2172,7 @@ public:
         revSB.set (p.xoverLowHz, p.xoverHighHz, p.reverbMode == 1 ? p.blackBandDb : p.revBandDb);
         layerSB.set (p.xoverLowHz, p.xoverHighHz, p.layerBandDb);
         envSB.set (1000.0f, 4000.0f, { 0, 0, 0 });
+        envSB.gc = msToCoef (p.widthTiming ? 5.0f : 20.0f, fs);   // v2.8: the lift drops fast when a syllable starts (20 ms before)
         wEnvOn = p.widthEnvAmount > 0.001f && p.hasWidthEnvGain && p.widthOn;
         delaySB.set (p.xoverLowHz, p.xoverHighHz, p.delayBandDb);
 
@@ -2275,7 +2302,11 @@ public:
             {
                 if (wEnv.detect (lastOutMid))
                     for (int b = 0; b < 3; ++b)
-                        envSB.gT[(size_t) b] = dbToGain (std::clamp (WidthEnvelope::gainAt (p.widthEnvGainDb, b, wEnv.d) * p.widthEnvAmount, -12.0f, 18.0f));
+                    {
+                        float gdb = WidthEnvelope::gainAt (p.widthEnvGainDb, b, wEnv.d) * p.widthEnvAmount;
+                        if (gdb > 0.0f) gdb *= widthLayer.envScale;   // v2.8 timing (1 before v2.8)
+                        envSB.gT[(size_t) b] = dbToGain (std::clamp (gdb, -12.0f, 18.0f));
+                    }
                 ws = envSB.process (ws);
             }
             {   // v1.13 note-onset envelope on the layer's highs: narrow at the start of each note, opening over ~60 ms
@@ -2328,6 +2359,7 @@ public:
             duckGr = target > duckGr ? duckAtk * duckGr + (1 - duckAtk) * target : duckRel * duckGr + (1 - duckRel) * target;
             maxDuck = std::max (maxDuck, duckGr);
             float dg = dbToGain (-duckGr);
+            const float mixMid = 0.5f * (l + r) + 0.5f * (wl + wr) * dg;   // v2.8: the output mid whatever LISTEN solos
             if (p.listenMode == 1)      { l = wl * dg; r = wr * dg; }   // LISTEN WET: reverb + echo only, after the ducking
             else if (p.listenMode == 2) { l = ws; r = -ws; }            // LISTEN WIDTH: the width layer only (side)
             else { l += wl * dg + ws; r += wr * dg - ws; }
@@ -2336,7 +2368,8 @@ public:
             L[i] = l * outGain;
             if (R) R[i] = r * outGain;
             if (learnOn) learner.push (rawMono, 0.5f * (l + r));
-            lastOutMid = 0.5f * (l + r);   // v2.2 detector input (one sample late)
+            lastOutMid = p.widthTiming ? mixMid : 0.5f * (l + r);   // width envelope detector (one sample late); v2.8: the
+                                                                    // mix even while LISTEN WIDTH solos the layer
             pkOut = std::max (pkOut, std::max (std::abs (L[i]), R ? std::abs (R[i]) : 0.0f));
         }
         mDelayMs = dlyMs; mDeess = maxDs;

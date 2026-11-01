@@ -190,7 +190,8 @@
    13.1,
    7.0,
    1.5
-  ]
+  ],
+  "timing": true
  },
  "multiband_width": {
   "xover_low_hz": 300.0,

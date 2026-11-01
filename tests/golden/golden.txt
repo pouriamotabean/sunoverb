@@ -74,3 +74,15 @@ vowel_Velvet_Female.json -16.672 -22.613 -18.135 -31.708 -18.145 -1.660 16b54a66
 exact_Velvet_Female.json -17.103 -23.412 -18.787 -27.682 -18.320 -0.810 b35e9ac4f510ed53
 preset_Velvet_Female.json -17.956 -24.617 -20.033 -25.795 -18.720 -0.824 a143dc6b0c16ec1d
 black_Velvet_Female.json -17.990 -24.646 -20.069 -25.829 -18.231 -1.079 9e907ca98240b101
+timing_Black_Female.json -16.826 -22.817 -18.315 -30.970 -15.359 -2.151 7e44666d2e8e0331
+timing_Black_Male.json -17.057 -25.172 -18.028 -30.421 -15.460 -1.218 707a6960b93ab4ce
+timing_Blue_Male.json -17.071 -24.856 -18.222 -28.865 -14.263 -1.903 f2d75d0f06f4b637
+timing_Dreamy_Female.json -16.885 -22.877 -18.372 -31.047 -13.012 -2.405 c4d2d850cde29ffb
+timing_Dreamy_Male.json -17.123 -25.241 -18.093 -30.504 -13.108 -1.374 1339b12e470aa973
+timing_Pouria_Signature.json -17.083 -25.705 -17.969 -30.332 -15.605 -1.450 10a37a3b9b52d45b
+timing_Radio_Male.json -16.854 -26.096 -17.667 -29.721 -15.543 -0.838 695e0925088887ec
+timing_Suno_Female.json -16.823 -22.818 -18.309 -30.979 -15.474 -1.890 105531981f18a697
+timing_Suno_Lead_Reference.json -22.476 -29.799 -23.592 -36.318 -15.430 -6.938 5fc3cf9f1901cc5d
+timing_Suno_Male.json -17.056 -25.173 -18.027 -30.425 -15.635 -1.349 f5ee56a384c8fb3e
+timing_Velvet_Female.json -16.678 -22.640 -18.125 -31.913 -18.302 -2.276 8010d7373e71a2de
+timing_Velvet_Male.json -16.833 -23.686 -18.017 -31.740 -18.226 -1.489 e3f1498d425ac67c

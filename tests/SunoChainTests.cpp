@@ -342,11 +342,22 @@ static void suitePresets()
     const double fs = 44100; auto vox = makeVocal (fs, 12.0);
     for (const auto& fp : factory::presets)
     {
-        // SYLLABLE LEVELER (what the factory preset asks for since v2.3): its own golden entries
+        // WIDTH TIMING (what the factory preset asks for since v2.8): its own golden entries
+        {
+            Rig t (fs, 256); juce::String err;
+            t.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
+            check (t.get ("widthTiming") == 1.0f, juce::String (fp.file) + ": factory preset uses the WIDTH TIMING");
+            t.learnAndMatch (vox);
+            auto outT = t.run (vox);
+            finiteAndSane (outT, fs, juce::String (fp.file) + " WIDTH TIMING");
+            compareGolden (juce::String ("timing_") + fp.file, measure (outT, fs, t.p->getLatencySamples()));
+        }
+        // SYLLABLE LEVELER without the width timing (= v2.3 - v2.7): must keep its golden entries
         {
             Rig y (fs, 256); juce::String err;
             y.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (y.get ("sylComp") == 100.0f, juce::String (fp.file) + ": factory preset uses the SYLLABLE LEVELER");
+            y.set ("widthTiming", 0.0f);
             y.learnAndMatch (vox);
             auto outY = y.run (vox);
             finiteAndSane (outY, fs, juce::String (fp.file) + " SYLLABLE LEVELER");
@@ -357,7 +368,7 @@ static void suitePresets()
             Rig w (fs, 256); juce::String err;
             w.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (w.get ("widthEnv") == 100.0f, juce::String (fp.file) + ": factory preset uses the WIDTH ENVELOPE");
-            w.set ("sylComp", 0.0f);
+            w.set ("sylComp", 0.0f); w.set ("widthTiming", 0.0f);
             w.learnAndMatch (vox);
             auto outW = w.run (vox);
             finiteAndSane (outW, fs, juce::String (fp.file) + " WIDTH ENVELOPE");
@@ -368,7 +379,7 @@ static void suitePresets()
             Rig v (fs, 256); juce::String err;
             v.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (v.get ("eqVowel") == 1.0f, juce::String (fp.file) + ": factory preset uses the VOWEL EQ");
-            v.set ("widthEnv", 0.0f); v.set ("sylComp", 0.0f);
+            v.set ("widthEnv", 0.0f); v.set ("sylComp", 0.0f); v.set ("widthTiming", 0.0f);
             v.learnAndMatch (vox);
             auto outV = v.run (vox);
             finiteAndSane (outV, fs, juce::String (fp.file) + " VOWEL");
@@ -380,7 +391,7 @@ static void suitePresets()
             e.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (e.get ("eqExact") == 1.0f, juce::String (fp.file) + ": factory preset uses the EXACT EQ solver");
             check (e.get ("sibGuard") == 1.0f, juce::String (fp.file) + ": factory preset uses the SIBILANT GUARD");
-            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f); e.set ("sylComp", 0.0f);
+            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f); e.set ("sylComp", 0.0f); e.set ("widthTiming", 0.0f);
             e.learnAndMatch (vox);
             auto outE = e.run (vox);
             finiteAndSane (outE, fs, juce::String (fp.file) + " EXACT");
@@ -392,7 +403,7 @@ static void suitePresets()
         const bool ok = r.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
         check (ok, juce::String (fp.file) + ": loads (" + err + ")");
         if (! ok) continue;
-        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f); r.set ("sylComp", 0.0f);   // = v2.0
+        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f); r.set ("sylComp", 0.0f); r.set ("widthTiming", 0.0f);   // = v2.0
         r.learnAndMatch (vox);
         auto out = r.run (vox);
         finiteAndSane (out, fs, fp.file);
@@ -565,11 +576,21 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             d6.p->setStateInformation (legacy6.getData(), (int) legacy6.getSize());
             check (d6.get ("sylComp") == 0.0f, "session from before v2.3 restores with the SYLLABLE LEVELER off");
         }
+        {
+            Rig d7 (fs, 256);
+            auto x11 = xmlOf (s1);
+            for (auto* e = x11->getFirstChildElement(); e != nullptr; e = e->getNextElement())
+                if (e->getStringAttribute ("id") == "widthTiming") { x11->removeChildElement (e, true); break; }
+            auto legacy7 = blobOf (*x11);
+            d7.p->setStateInformation (legacy7.getData(), (int) legacy7.getSize());
+            check (d7.get ("widthTiming") == 0.0f, "session from before v2.8 restores with the WIDTH TIMING off");
+        }
         Rig fresh (fs, 256);
         check (fresh.get ("eqExact") == 1.0f, "a new instance uses the EXACT EQ solver");
         check (fresh.get ("eqVowel") == 1.0f, "a new instance uses the VOWEL EQ");
         check (fresh.get ("widthEnv") == 100.0f, "a new instance uses the WIDTH ENVELOPE");
         check (fresh.get ("sylComp") == 100.0f, "a new instance uses the SYLLABLE LEVELER");
+        check (fresh.get ("widthTiming") == 1.0f, "a new instance uses the WIDTH TIMING");
     }
     {   // installed factory presets from v2.0 (no breath entry, never edited) are refreshed; edited copies are not
         auto dir = SunoChainProcessor::presetFolder();
@@ -661,6 +682,10 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             e7.set ("sylComp", 70.0f); e7.p->savePresetFile (tmp, er3);
             Rig e10 (fs, 256); e10.p->loadPresetFile (tmp, er3);
             check (std::abs (e10.get ("sylComp") - 70.0f) < 0.01f, "saved preset keeps the SYLLABLE LEVELER amount");
+            auto x12 = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[6].json));
+            if (auto* q = x12["width_layer"].getDynamicObject()) q->removeProperty ("timing");
+            Rig e11 (fs, 256); e11.loadPresetText (juce::JSON::toString (x12), "old_timing.json", err);
+            check (e11.get ("widthTiming") == 0.0f, "preset without width_layer.timing (before v2.8) loads with the WIDTH TIMING off");
             tmp.deleteFile();
         }
         Rig f2 (fs, 256);

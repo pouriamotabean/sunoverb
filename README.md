@@ -1,4 +1,4 @@
-# Suno Chain v2.7.0
+# Suno Chain v2.8.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,21 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.8.0 (WIDTH TIMING)
+- Measured on the Suno stems how the width moves in time around syllable onsets: a phrase that starts after a pause
+  (>= 100 ms, 22 dB down) stays almost mono for ~200 ms and opens between 200 and 250 ms (female: side -25..-29 dB
+  re mid for 200 ms, then -20 dB); inside a phrase the width is steady. Ours was wide from the first milliseconds
+  and the WIDTH ENVELOPE (v2.2) even widened the onsets (female phrase starts: side -5 dB re mid at 20 ms).
+- **WIDTH TIMING** (new host parameter, on for new sessions and the factory presets, off for older ones): pauses
+  are detected relative to the singing peak, the layer stays closed for 170 ms after a pause and opens over 80 ms;
+  the width envelope's lift waits for the bloom and for each syllable to have started (30 + 50 ms) and drops in 5 ms.
+  LISTEN WIDTH no longer changes the width envelope.
+- Result, female phrase starts (side re mid, 20 / 100 / 200 / 300 ms): Suno -29 / -26 / -24 / -20, v2.7 -5 / -13 /
+  -15 / -12, v2.8 -32 / -35 / -23 / -15 dB. Syllable onsets inside phrases: 3-5 dB narrower, now close to Suno.
+- An earlier finding ("6-10 dB less incoherent side than Suno") was an artefact of the estimator (a 50 ms coherence
+  window counts our slowly turning width layer as coherent); the real difference was this time structure.
+- Older sessions and presets: bit-identical (golden `syl_*` ... `black_*` unchanged; new `timing_*`).
+
 ## v2.7.0 (a cleaner face; the sound is unchanged)
 - The face shows AMOUNT and two knobs per section (tone: match eq, compression / space: level, decay / width:
   width, held notes / echo: level, feedback): 9 knobs instead of 38.

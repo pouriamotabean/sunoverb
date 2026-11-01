@@ -191,7 +191,8 @@
    7.0,
    1.5
   ],
-  "motion": 0.0
+  "motion": 0.0,
+  "timing": true
  },
  "multiband_width": {
   "xover_low_hz": 300.0,
