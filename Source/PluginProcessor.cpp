@@ -251,20 +251,26 @@ void SunoChainProcessor::installFactoryPresets()
         juce::var onDisk, current;
         if (juce::JSON::parse (f.loadFileAsString(), onDisk).failed() || juce::JSON::parse (text, current).failed()) continue;
         if (! onDisk.isObject() || ! current.isObject()) continue;
+        // entries added after v2.0 (a whole section when the second name is empty)
         static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" }, { "eq", "vowel" }, { "eq", "target_curve_voiced_db" },
-                                          { "width_env", "amount" }, { "width_env", "gain_db" },
-                                          { "dynamics", "syllable_amount" }, { "dynamics", "syllable_ratio" } };
+                                          { "width_env", "" }, { "dynamics", "syllable_amount" }, { "dynamics", "syllable_ratio" } };
         bool missing = false;
         for (auto& a : added)
         {
-            const auto path = juce::String (a[0]) + "." + a[1];
+            const bool section = a[1][0] == 0;
+            const auto path = section ? juce::String (a[0]) : juce::String (a[0]) + "." + a[1];
             if (! has (onDisk, path.toRawUTF8()) && has (current, path.toRawUTF8()))
             {
-                missing = true;
-                if (auto* o = current[a[0]].getDynamicObject()) o->removeProperty (a[1]);   // compare without it
+                missing = true;   // compare without it
+                if (section) { if (auto* o = current.getDynamicObject()) o->removeProperty (a[0]); }
+                else if (auto* o = current[a[0]].getDynamicObject()) o->removeProperty (a[1]);
             }
         }
-        if (! missing) continue;
+        // v2.5: "measurements" is information only (Suno numbers for the graphs); a corrected value there refreshes an
+        // unedited copy too
+        const bool measChanged = juce::JSON::toString (onDisk["measurements"]) != juce::JSON::toString (current["measurements"]);
+        for (auto* v : { &onDisk, &current }) if (auto* o = v->getDynamicObject()) o->removeProperty ("measurements");
+        if (! missing && ! measChanged) continue;
         if (juce::JSON::toString (onDisk, true) == juce::JSON::toString (current, true)) f.replaceWithText (text);
     }
 }
@@ -812,6 +818,61 @@ void SunoChainProcessor::pumpMeters()
 {
     const juce::SpinLock::ScopedTryLockType ml (meterLock);
     if (ml.isLocked()) chain.pumpMeters();
+}
+
+SunoChainProcessor::MatchSnapshot SunoChainProcessor::getMatch() const
+{
+    MatchSnapshot m;
+    const juce::SpinLock::ScopedTryLockType ml (meterLock);   // prepareToPlay may be resetting the meter
+    if (! ml.isLocked()) return m;
+    const auto& mm = chain.matchMeter;
+    sc::Params p; std::array<float, 3> ws {}, wg {}; bool hasW = false; float tl = -19.4f;
+    {
+        const juce::SpinLock::ScopedLockType sl (presetLock);
+        p = buildParams(); ws = widthTargetSing; wg = widthTargetGap; hasW = hasWidthTarget; tl = targetLufs;
+    }
+    const auto& fc = sc::bandCenters();
+    std::array<float, sc::kNumBands> c {};
+    if (p.hasTarget && mm.toneCurve (c))
+    {
+        const auto& t = (p.eqVowel && p.hasTargetV) ? p.targetCurveV : p.targetCurve;
+        double hi = 0, err = 0; int nh = 0, ne = 0;
+        for (int b = 0; b < sc::kNumBands; ++b)
+        {
+            const double d = c[(size_t) b] - t[(size_t) b];
+            if (fc[(size_t) b] >= 250.0f && fc[(size_t) b] <= 12500.0f) { err += std::abs (d); ++ne; }
+            if (fc[(size_t) b] >= 4000.0f && fc[(size_t) b] <= 12500.0f) { hi += d; ++nh; }
+        }
+        m.ok[0] = true; m.v[0] = (float) (hi / nh); m.toneErr = (float) (err / ne);
+    }
+    if (hasW)
+    {
+        float a = 0, b = 0; int na = 0, nb = 0;
+        for (size_t k = 0; k < 3; ++k)
+        {
+            const float sv = chain.mWidthBands[k].load(), gv = chain.mWidthBands[k + 3].load();
+            if (sv > -99.0f && ws[k] > -99.0f) { a += sv - ws[k]; ++na; }
+            if (gv > -99.0f && wg[k] > -99.0f) { b += gv - wg[k]; ++nb; }   // -100 = the Suno stem had no pauses
+        }
+        if (na == 3) { m.ok[1] = true; m.v[1] = a / 3; }
+        if (nb == 3) { m.ok[2] = true; m.v[2] = b / 3; }
+    }
+    float cr = 0;
+    if (mm.crest (cr)) { m.ok[3] = true; m.v[3] = cr - p.targetCrestDb; }
+    std::array<float, sc::SibilantAnalyzer::kSibBands> sb {};
+    if (mm.sibilants (sb))
+    {
+        double d = 0; int n = 0;
+        for (int b = 0; b < sc::SibilantAnalyzer::kSibBands; ++b)
+        {
+            const float f = fc[(size_t) (sc::SibilantAnalyzer::kFirstBand + b)];
+            if (f >= 4000.0f && f <= 12500.0f) { d += sb[(size_t) b] - p.sibTarget[(size_t) b]; ++n; }
+        }
+        m.ok[4] = true; m.v[4] = (float) (d / n);
+    }
+    const float lu = mm.lufs();
+    if (lu > -99.0f) { m.ok[5] = true; m.v[5] = lu + juce::Decibels::gainToDecibels (chain.outGain, -100.0f) - tl; }
+    return m;
 }
 
 SunoChainProcessor::Meters SunoChainProcessor::getMeters() const

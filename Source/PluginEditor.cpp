@@ -428,7 +428,7 @@ static juce::Path smoothPath (const std::vector<juce::Point<float>>& pts)
 void Display::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
-    if (mode == 1) paintWidth (g, r); else paintEq (g, r);
+    if (mode == 1) paintWidth (g, r); else if (mode == 2) paintMatch (g, r); else paintEq (g, r);
     // glass: reflection, inner shadow at the top and left, faint bottom highlight
     juce::ColourGradient refl (juce::Colours::white.withAlpha (0.055f), r.getX(), r.getY(),
                                juce::Colours::white.withAlpha (0.0f), r.getX() + r.getWidth() * 0.45f, r.getY() + r.getHeight() * 0.9f, false);
@@ -537,6 +537,43 @@ void Display::paintWidth (juce::Graphics& g, juce::Rectangle<float> r)
               col::text.withAlpha (0.8f), 9.0f, juce::Justification::centredLeft);
 }
 
+// v2.5 SUNO MATCH: one row per aspect, a dot on a -6..+6 dB scale whose centre is the preset's Suno measurement
+void Display::paintMatch (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    auto area = r.reduced (22, 0).withTrimmedTop (34).withTrimmedBottom (26);
+    struct Row { const char* name; const char* plus; const char* minus; };
+    const Row rows[6] { { "Tone", "brighter", "darker" }, { "Width", "wider", "narrower" }, { "Space", "more space", "drier" },
+                        { "Dynamics", "more dynamic", "flatter" }, { "S / Z", "louder s", "softer s" }, { "Loudness", "louder", "quieter" } };
+    const float rh = area.getHeight() / 6.0f, nameW = 86, textW = 132;
+    const float sx = area.getX() + nameW, sw = area.getWidth() - nameW - textW - 10;
+    auto X = [&] (float v) { return sx + sw * (juce::jlimit (-6.0f, 6.0f, v) + 6.0f) / 12.0f; };
+    drawCaps (g, "Suno", { X (0) - 30, area.getBottom() + 4, 60, 12 }, col::amber.withAlpha (0.9f), 9.0f);
+    for (float d : { -6.0f, -3.0f, 3.0f, 6.0f })
+        drawCaps (g, (d > 0 ? "+" : "") + juce::String ((int) d), { X (d) - 16, area.getBottom() + 4, 32, 12 }, col::dim.withAlpha (0.6f), 8.5f);
+    g.setColour (col::amber.withAlpha (0.22f)); g.drawVerticalLine ((int) X (0), area.getY(), area.getBottom());
+    g.setColour (col::green.withAlpha (0.05f)); g.fillRect (juce::Rectangle<float> (X (-1.5f), area.getY(), X (1.5f) - X (-1.5f), area.getHeight()));
+    for (int i = 0; i < 6; ++i)
+    {
+        const float cy = area.getY() + rh * ((float) i + 0.5f);
+        drawCaps (g, rows[i].name, { area.getX(), cy - 7, nameW, 14 }, col::text.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        g.setColour (juce::Colours::white.withAlpha (0.06f)); g.drawHorizontalLine ((int) cy, sx, sx + sw);
+        auto txt = juce::Rectangle<float> (sx + sw + 10, cy - 7, textW, 14);
+        if (! match.ok[(size_t) i])
+        {
+            drawCaps (g, i == 0 || i == 3 || i == 4 ? "listening" : "no data", txt, col::faint, 9.0f, juce::Justification::centredLeft);
+            continue;
+        }
+        const float v = match.v[(size_t) i], a = std::abs (v);
+        const auto c = a <= 1.5f ? col::green : (a <= 3.0f ? col::amber : juce::Colour (0xffff6a5a));
+        lampDot (g, { X (v), cy }, 3.4f, c, true);
+        const juce::String word = a <= 1.5f ? juce::String ("like Suno") : juce::String (v > 0 ? rows[i].plus : rows[i].minus);
+        drawCaps (g, (v >= 0 ? "+" : "") + juce::String (v, 1) + " dB  " + word, txt, c.withAlpha (0.95f), 9.0f, juce::Justification::centredLeft);
+    }
+    if (match.ok[0])
+        drawCaps (g, "Tone error " + juce::String (match.toneErr, 1) + " dB  (vowels, 250 Hz - 12 kHz)", { r.getX() + 18, r.getY() + 10, 300, 14 },
+                  col::dim.withAlpha (0.8f), 8.5f, juce::Justification::centredLeft);
+}
+
 //==============================================================================
 void Meters::update (const SunoChainProcessor::Meters& m)
 {
@@ -587,11 +624,16 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     setLookAndFeel (&lnf);
     setOpaque (true);
     addAndMakeVisible (display); addAndMakeVisible (meters); addAndMakeVisible (pill);
-    for (auto* b : std::initializer_list<juce::Component*> { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &advancedB, &matchB, &freezeB, &listenSel, &blackSw, &lcd }) addAndMakeVisible (*b);
-    eqTab.underlineWhenOn = widthTab.underlineWhenOn = true;
+    for (auto* b : std::initializer_list<juce::Component*> { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &matchTab, &advancedB, &matchB, &freezeB, &listenSel, &blackSw, &lcd }) addAndMakeVisible (*b);
+    eqTab.underlineWhenOn = widthTab.underlineWhenOn = matchTab.underlineWhenOn = true;
     eqTab.setToggleState (true, juce::dontSendNotification);
-    eqTab.onClick = [this] { display.setMode (0); eqTab.setToggleState (true, juce::dontSendNotification); widthTab.setToggleState (false, juce::dontSendNotification); };
-    widthTab.onClick = [this] { display.setMode (1); eqTab.setToggleState (false, juce::dontSendNotification); widthTab.setToggleState (true, juce::dontSendNotification); };
+    auto tab = [this] (int m)
+    {
+        display.setMode (m);
+        eqTab.setToggleState (m == 0, juce::dontSendNotification); widthTab.setToggleState (m == 1, juce::dontSendNotification);
+        matchTab.setToggleState (m == 2, juce::dontSendNotification);
+    };
+    eqTab.onClick = [tab] { tab (0); }; widthTab.onClick = [tab] { tab (1); }; matchTab.onClick = [tab] { tab (2); };
     loadB.onClick = [this] { loadPreset(); };
     saveB.onClick = [this] { savePreset(); };
     learnB.onClick = [this] { toggleLearn(); };
@@ -760,7 +802,7 @@ void Root::paint (juce::Graphics& g)
             glowLine (g, { bx, cy - h / 2, bx, cy + h / 2 }, col::cream, 1.6f, 0.75f);
         }
         drawCaps (g, "Suno Chain", { x + 44, cy - 16, 230, 28 }, col::cream.withAlpha (0.92f), 21.0f, juce::Justification::centredLeft);
-        drawCaps (g, "v2.4.0", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
+        drawCaps (g, "v2.5.0", { x + 214, cy - 7, 44, 14 }, col::dim.withAlpha (0.85f), 9.5f, juce::Justification::centredLeft);
         drawCaps (g, "by Pouria Motabean", { x + 45, cy + 12, 230, 14 }, col::amber.withAlpha (0.8f), 10.0f, juce::Justification::centredLeft);
     }
     // section titles
@@ -798,7 +840,7 @@ void Root::resized()
 
     // glass display (inside the faceplate well) + tabs, meters, AMOUNT
     display.setBounds (144, 182, 580, 207);
-    eqTab.setBounds (600, 188, 48, 24); widthTab.setBounds (648, 188, 70, 24);
+    eqTab.setBounds (532, 188, 48, 24); widthTab.setBounds (580, 188, 70, 24); matchTab.setBounds (650, 188, 70, 24);
     meters.setBounds (785, 182, 145, 207);
     placeKnob ("amount", 1046, 262, 150);
 
@@ -921,7 +963,7 @@ void Root::tick()
             k->label.setColour (juce::Label::textColourId, show ? col::amberHi : col::text.withAlpha (0.82f));
         }
     }
-    if (++ticks % 4 == 0) display.setCurves (proc.getCurves());
+    if (++ticks % 4 == 0) { display.setCurves (proc.getCurves()); display.setMatch (proc.getMatch()); }
 }
 
 void Root::loadPreset()

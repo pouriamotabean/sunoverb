@@ -138,13 +138,16 @@ class Display : public juce::Component
 public:
     void setCurves (const SunoChainProcessor::CurveSnapshot& s) { snap = s; repaint(); }
     void setWidth (const std::array<float, 6>& w) { widthBands = w; if (mode == 1) repaint(); }
+    void setMatch (const SunoChainProcessor::MatchSnapshot& m) { match = m; if (mode == 2) repaint(); }
     void setMode (int m) { mode = m; repaint(); }
     int getMode() const { return mode; }
     void paint (juce::Graphics&) override;
 private:
     void paintEq (juce::Graphics&, juce::Rectangle<float>);
     void paintWidth (juce::Graphics&, juce::Rectangle<float>);
+    void paintMatch (juce::Graphics&, juce::Rectangle<float>);
     SunoChainProcessor::CurveSnapshot snap;
+    SunoChainProcessor::MatchSnapshot match;
     std::array<float, 6> widthBands { -100, -100, -100, -100, -100, -100 };
     int mode = 0;
 };
@@ -196,7 +199,7 @@ private:
     Meters meters;
     PresetPill pill;
     FlatButton loadB { "LOAD" }, saveB { "SAVE" }, learnB { "LEARN" }, clearB { "CLEAR" };
-    TextLink eqTab { "EQ", 11.0f }, widthTab { "WIDTH", 11.0f };
+    TextLink eqTab { "EQ", 11.0f }, widthTab { "WIDTH", 11.0f }, matchTab { "MATCH", 11.0f };
     SlideSwitch advancedB { "ADVANCED" };
     GlassButton matchB { "MATCH LOUDNESS" }, freezeB { "FREEZE" };
     Selector listenSel;

@@ -1,6 +1,6 @@
 # Suno Chain – Roadmap
 
-Current version: **v2.4.0** (Dreamy Female, Velvet Female). v2.3.0: SYLLABLE LEVELER. v2.2.0: WIDTH ENVELOPE. v2.1.0: VOWEL EQ. v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
+Current version: **v2.5.0** (SUNO MATCH meter). v2.4.0: Dreamy Female, Velvet Female. v2.3.0: SYLLABLE LEVELER. v2.2.0: WIDTH ENVELOPE. v2.1.0: VOWEL EQ. v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
 
 ## 1. Next steps (in order)
 1. **Pouria tests v2.0** on his own and other vocals; all sound / GUI issues reported at once and fixed in one release.
@@ -39,7 +39,7 @@ Current version: **v2.4.0** (Dreamy Female, Velvet Female). v2.3.0: SYLLABLE LEV
 - **Rhythmic gate on the reverb**: tempo-synced from the host; 8 step patterns (up to 16 steps), rates 1/4-1/64
   incl. triplet and dotted, attack/decay/sustain/release, mix, randomize; off by default (Advanced). Low priority.
 - **A/B with the Suno vocal itself**: load the Suno stem in the plugin, one button to switch, loudness-matched.
-- **Suno match indicator**: live numbers for EQ, width, dynamics, S/Z and reverb (how close the output is to Suno).
+- ~~**Suno match indicator**~~ done in v2.5.0 (MATCH tab).
 - **Verse / Chorus mode**: two full snapshots and an automatable Morph knob.
 - **Delay throw**: delay only on phrase ends.
 - **Smooth**: gentle dynamic EQ for momentary resonances.

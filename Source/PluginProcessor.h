@@ -88,6 +88,11 @@ public:
                     std::array<float, 6> widthBands; };   // output side-mid per band: singing low/mid/high, pauses low/mid/high
     Meters getMeters() const;
     void pumpMeters();   // v2.0.1: runs the WIDTH analysis (message thread, editor timer)
+    // v2.5 SUNO MATCH: how far the output is from the preset's Suno measurements (output minus Suno, dB)
+    // rows: 0 tone (highs 4-12.5 kHz on vowels), 1 width (singing), 2 space (pauses), 3 dynamics (crest),
+    //       4 S/Z (sibilants 4-12.5 kHz re vowel), 5 loudness (LUFS, after Output)
+    struct MatchSnapshot { std::array<bool, 6> ok {}; std::array<float, 6> v {}; float toneErr = 0; };
+    MatchSnapshot getMatch() const;
 
 private:
     void parameterChanged (const juce::String&, float) override { dirty = true; }

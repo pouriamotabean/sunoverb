@@ -1,4 +1,4 @@
-# Suno Chain v2.4.0
+# Suno Chain v2.5.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,18 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.5.0 (SUNO MATCH meter; the sound is unchanged)
+- New **MATCH** tab in the display: six rows, each a dot on a -6..+6 dB scale whose centre is the preset's Suno
+  measurement, green within 1.5 dB: TONE (vowel highs 4-12.5 kHz; the overall vowel tone error is shown on top),
+  WIDTH (singing), SPACE (pauses), DYNAMICS (crest), S / Z (sibilants re vowel, 4-12.5 kHz), LOUDNESS (after Output).
+- Measured on the output the same way the presets measured Suno (vowel spectrum as Learn, crest as the analyzer,
+  the plugin's own sibilant analyzer, BS.1770), over the last ~30 s of playback, on the message thread (no load on
+  the audio thread). Check: Suno's own stems fed straight into the meter land within +-3 dB of their preset.
+- Fixed: the pause-width targets of Suno Male / Black Male / Dreamy Male / Pouria Signature had been averaged with a
+  stem that has no pauses (-100); now -10.2 / -4.6 / -24.3 dB (WIDTH graph and MATCH only). Installed factory copies
+  that were never edited are refreshed when only such information values differ, and v2.1 copies (no width
+  envelope section) are now refreshed too.
+
 ## v2.4.0 (Dreamy Female, Velvet Female)
 - Two new factory presets (12 now): **Dreamy Female** and **Velvet Female** = the by-ear character of Dreamy Male /
   Velvet Male (reverb, width, ducking, delay, knobs, loudness) + every voice-dependent value of Suno Female (EQ and

@@ -1551,6 +1551,118 @@ struct LoudnessMeter
 };
 
 //==============================================================================
+// v2.5 SUNO MATCH meter. Runs on the message thread (fed from the same FIFO as the WIDTH meter) and measures the
+// output the way the presets measure Suno, over roughly the last 30 s of singing:
+//  - tone: spectrum of the loud vowel frames (Learner::frameVoiced, 4096-point frames, per-bin band means)
+//  - dynamics: median crest (peak - RMS) of the active 50 ms blocks (> top - 20 dB), as the analyzer's crest_db
+//  - sibilants: the plugin's own SibilantAnalyzer (as deesser.sib_curve_db), 60 s windows
+//  - loudness: BS.1770 integrated over the last 30 s (gated)
+struct MatchMeter
+{
+    static constexpr int kFft = 4096, kBlocks = 600, kSubs = 300;
+    double fs = 48000; int hop = 2048, hopCount = 0, rPos = 0;
+    std::vector<float> ring, win; std::vector<std::complex<float>> buf;
+    std::array<double, kNumBands> tone {}; double toneW = 0, decay = 1; float top = -200, topFall = 0;
+    int bLen = 2400, bPos = 0; double bSum = 0; float bPk = 0; std::vector<float> bRms, bPeak; int bHead = 0, bN = 0;
+    Biquad kS0, kS1, kH0, kH1; double lAcc = 0; int lCnt = 0, lLen = 4800; std::vector<float> lSub; int lHead = 0, lN = 0;
+    SibilantAnalyzer sib; std::array<float, SibilantAnalyzer::kSibBands> sibCurve {}; bool hasSib = false; int sibTick = 0;
+    float crestCache = 0; bool hasCrest = false; int crestTick = 0;
+
+    void prepare (double s)
+    {
+        fs = s; hop = kFft / 2; hopCount = 0; rPos = 0;
+        ring.assign (kFft, 0.0f); buf.assign (kFft, {}); win.resize (kFft);
+        for (int i = 0; i < kFft; ++i) win[(size_t) i] = (float) (0.5 - 0.5 * std::cos (2 * kPi * i / (kFft - 1)));
+        tone.fill (0); toneW = 0; decay = std::exp (-(double) hop / (30.0 * fs)); top = -200; topFall = (float) (0.3 * hop / fs);
+        bLen = std::max (1, (int) std::round (0.05 * fs)); bPos = 0; bSum = 0; bPk = 0;
+        bRms.assign (kBlocks, -200.0f); bPeak.assign (kBlocks, -200.0f); bHead = 0; bN = 0;
+        for (auto* b : { &kS0, &kS1 }) { b->reset(); b->setHighShelf (fs, 1681.97, 4.0, 0.7072); }
+        for (auto* b : { &kH0, &kH1 }) { b->reset(); b->setHPF (fs, 38.135, 0.5003); }
+        lAcc = 0; lCnt = 0; lLen = std::max (1, (int) std::round (0.1 * fs)); lSub.assign (kSubs, 0.0f); lHead = 0; lN = 0;
+        sib.prepare (fs, 60.0); sibCurve.fill (0); hasSib = false; sibTick = 0; hasCrest = false; crestTick = 0;
+    }
+    void push (float l, float r)
+    {
+        const float m = 0.5f * (l + r);
+        // tone
+        ring[(size_t) rPos] = m; rPos = (rPos + 1) % kFft;
+        if (++hopCount >= hop) { hopCount = 0; frame(); }
+        // dynamics
+        bSum += (double) m * m; bPk = std::max (bPk, std::abs (m));
+        if (++bPos >= bLen)
+        {
+            bRms[(size_t) bHead] = (float) (10 * std::log10 (bSum / bLen + 1e-20)); bPeak[(size_t) bHead] = gainToDb (bPk);
+            bHead = (bHead + 1) % kBlocks; bN = std::min (bN + 1, kBlocks); bPos = 0; bSum = 0; bPk = 0;
+            if (++crestTick >= 20) { crestTick = 0; updateCrest(); }
+        }
+        // loudness
+        const float a = kH0.process (kS0.process (l, 0), 0), b = kH1.process (kS1.process (r, 0), 0);
+        lAcc += (double) a * a + (double) b * b;
+        if (++lCnt >= lLen) { lSub[(size_t) lHead] = (float) (lAcc / lCnt); lHead = (lHead + 1) % kSubs; lN = std::min (lN + 1, kSubs); lAcc = 0; lCnt = 0; }
+        // sibilants
+        sib.push (m);
+        if (++sibTick >= (int) (2.0 * fs)) { sibTick = 0; std::array<float, SibilantAnalyzer::kSibBands> c {}; if (sib.summarise (c) >= 3) { sibCurve = c; hasSib = true; } }
+        if (sib.n >= sib.maxFrames) sib.reset();
+    }
+    void frame()
+    {
+        double e = 0;
+        for (int i = 0; i < kFft; ++i) { const float x = ring[(size_t) ((rPos + i) % kFft)]; buf[(size_t) i] = { x * win[(size_t) i], 0.0f }; e += (double) x * x; }
+        const float lv = (float) (10 * std::log10 (e / kFft + 1e-20));
+        if (lv > top) top = lv; else top -= topFall;
+        if (lv < top - 25.0f || lv < -80.0f) return;
+        fftInPlace (buf);
+        std::array<float, kNumBands> db {}; std::array<double, kNumBands> pw {};
+        const auto& fc = bandCenters();
+        for (int b = 0; b < kNumBands; ++b)
+        {
+            const double lo = fc[(size_t) b] / std::pow (2.0, 1.0 / 6), hi = fc[(size_t) b] * std::pow (2.0, 1.0 / 6);
+            const int k0 = std::max (1, (int) std::ceil (lo * kFft / fs)), k1 = std::min (kFft / 2, (int) std::floor (hi * kFft / fs));
+            double sum = 0; int cnt = 0; for (int k = k0; k <= k1; ++k) { sum += std::norm (buf[(size_t) k]); ++cnt; }
+            pw[(size_t) b] = cnt > 0 ? sum / cnt : 0.0; db[(size_t) b] = (float) (10 * std::log10 (pw[(size_t) b] + 1e-20));
+        }
+        if (! Learner::frameVoiced (db.data())) return;
+        for (int b = 0; b < kNumBands; ++b) tone[(size_t) b] = tone[(size_t) b] * decay + pw[(size_t) b];
+        toneW = toneW * decay + 1.0;
+    }
+    void updateCrest()
+    {
+        if (bN < 100) return;
+        std::vector<float> r (bRms.begin(), bRms.begin() + bN), sorted = r; std::sort (sorted.begin(), sorted.end());
+        const float t = sorted[(size_t) (0.95 * (bN - 1))];
+        std::vector<float> c;
+        for (int i = 0; i < bN; ++i) if (r[(size_t) i] > t - 20.0f && r[(size_t) i] > -80.0f) c.push_back (bPeak[(size_t) i] - r[(size_t) i]);
+        if (c.size() < 40) return;
+        std::nth_element (c.begin(), c.begin() + (long) (c.size() / 2), c.end()); crestCache = c[c.size() / 2]; hasCrest = true;
+    }
+    // results (normalised tone curve, mean of 250 Hz - 4 kHz = 0)
+    bool toneCurve (std::array<float, kNumBands>& c) const
+    {
+        if (toneW < 20.0) return false;
+        for (int b = 0; b < kNumBands; ++b) c[(size_t) b] = (float) (10 * std::log10 (tone[(size_t) b] / toneW + 1e-30));
+        Learner::normaliseCurve (c); return true;
+    }
+    bool crest (float& c) const { c = crestCache; return hasCrest; }
+    bool sibilants (std::array<float, SibilantAnalyzer::kSibBands>& c) const { c = sibCurve; return hasSib; }
+    float lufs() const
+    {
+        if (lN < 50) return -100.0f;
+        std::vector<double> blk;
+        for (int i = 0; i + 4 <= lN; ++i)
+        {
+            double z = 0; for (int k = 0; k < 4; ++k) z += lSub[(size_t) ((lHead - lN + i + k + 2 * kSubs) % kSubs)];
+            blk.push_back (0.25 * z);
+        }
+        auto L = [] (double z) { return -0.691 + 10 * std::log10 (z + 1e-20); };
+        double s = 0; int c = 0; for (double z : blk) if (L (z) > -70) { s += z; ++c; }
+        if (c < 5) return -100.0f;
+        const double rel = L (s / c) - 10; s = 0; c = 0;
+        for (double z : blk) if (L (z) > -70 && L (z) > rel) { s += z; ++c; }
+        return c > 0 ? (float) L (s / c) : -100.0f;
+    }
+};
+
+//==============================================================================
 // Harmonic exciter (v1.11, replaces the broadband tanh saturation). Suno's vowels carry ~2 dB more harmonic
 // (tonal) energy at 4-8 kHz and ~3-4 dB more "air" at 10-16 kHz than your voice after the Match EQ. Two bands
 // of the voice are run through Chebyshev shapers (T2 + T3: octave and octave + fifth of what goes in), on a
@@ -1803,6 +1915,7 @@ public:
     SideBands envSB; WidthEnvelope wEnv; float lastOutMid = 0; bool wEnvOn = false;   // v2.2 WIDTH ENVELOPE
     Learner learner;
     WidthMeter widthMeter;   // output width per band (WIDTH graph); v2.0.1: runs on the message thread (pumpMeters)
+    MatchMeter matchMeter;   // v2.5 SUNO MATCH (message thread, same FIFO)
     StereoFifo meterFifo;    // audio thread -> widthMeter
     LoudnessMeter loud;      // Match Loudness: output before the Output knob and the loudness gain
     float restoreGain = 1;
@@ -1848,7 +1961,7 @@ public:
         widthLayer.prepare (fs); learner.prepare (fs);
         revSB.prepare (fs); layerSB.prepare (fs); delaySB.prepare (fs);
         envSB.prepare (fs); wEnv.prepare (fs); lastOutMid = 0;
-        widthMeter.prepare (fs, 8.0); meterFifo.allocate ((size_t) fs);   // 1 s of headroom between editor timer ticks
+        widthMeter.prepare (fs, 8.0); matchMeter.prepare (fs); meterFifo.allocate ((size_t) fs);   // 1 s of headroom between editor timer ticks
         loud.prepare (fs);
         for (auto& m : mWidthBands) m = -100.0f;
         wetHp.reset(); wetLp.reset(); wetBump.reset(); wetMud.reset(); wetAir.reset();
@@ -1877,7 +1990,7 @@ public:
     // the heaviest callbacks ~5x the average. It now runs here, on the message thread (editor timer / tools).
     void pumpMeters()
     {
-        meterFifo.drain ([this] (float l, float r) { widthMeter.push (l, r); });
+        meterFifo.drain ([this] (float l, float r) { widthMeter.push (l, r); matchMeter.push (l, r); });
         std::array<float, 6> wv {}; widthMeter.values (wv);
         for (size_t k = 0; k < 6; ++k) mWidthBands[k] = wv[k];
     }

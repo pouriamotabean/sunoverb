@@ -583,6 +583,25 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
         f2.replaceWithText (juce::JSON::toString (edited, true));
         { SunoChainProcessor fresh; }
         check (f1.loadFileAsString() == juce::String::fromUTF8 (factory::presets[0].json), "unedited v2.0 factory preset on disk refreshed (BREATH 40 % explicit)");
+        {   // v2.1 copy (no width_env section, no syllable entries) and a copy with old information-only measurements
+            auto o21 = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[0].json));
+            if (auto* q = o21.getDynamicObject()) q->removeProperty ("width_env");
+            if (auto* q = o21["dynamics"].getDynamicObject()) { q->removeProperty ("syllable_amount"); q->removeProperty ("syllable_ratio"); }
+            f1.replaceWithText (juce::JSON::toString (o21, true));
+            { SunoChainProcessor fresh2; }
+            check (f1.loadFileAsString() == juce::String::fromUTF8 (factory::presets[0].json), "unedited v2.1 factory preset on disk refreshed (width envelope, syllable leveler)");
+            auto om = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[0].json));
+            if (auto* q = om["measurements"].getDynamicObject()) q->setProperty ("old_value", 1.0); else if (auto* r = om.getDynamicObject()) r->setProperty ("measurements", juce::var (new juce::DynamicObject()));
+            f1.replaceWithText (juce::JSON::toString (om, true));
+            { SunoChainProcessor fresh3; }
+            check (f1.loadFileAsString() == juce::String::fromUTF8 (factory::presets[0].json), "factory preset with old measurements (information only) refreshed");
+            auto ed = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[0].json));
+            if (auto* q = ed["measurements"].getDynamicObject()) q->setProperty ("old_value", 1.0);
+            if (auto* u = ed["user"].getDynamicObject()) u->setProperty ("amount", 55.0);
+            f1.replaceWithText (juce::JSON::toString (ed, true));
+            { SunoChainProcessor fresh4; }
+            check (f1.loadFileAsString() == juce::JSON::toString (ed, true), "edited preset with old measurements left untouched");
+        }
         check (f2.loadFileAsString() == juce::JSON::toString (edited, true), "edited preset on disk left untouched");
         f1.replaceWithText (keep1); f2.replaceWithText (keep2);
     }
