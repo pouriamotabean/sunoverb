@@ -298,11 +298,12 @@ static void suiteGuard()
         juce::IIRFilter hp; hp.setCoefficients (juce::IIRCoefficients::makeHighPass (fs, 4500.0)); Lcg rng; rng.s = 99;
         for (int i = (int) (7.0 * fs); i < a1; ++i) { const float v = hp.processSingleSampleRaw (rng.next()); if (i >= a0) for (int c = 0; c < 2; ++c) loud.setSample (c, i, loud.getSample (c, i) + 0.3f * v); }
     }
+    float lowCut = 0.0f;   // first as calibrated (v2.0.4 - v3.0), then with the v3.1 LOW CUT in front
     auto render = [&] (const juce::AudioBuffer<float>& in, float guard)
     {
         Rig r (fs, 256); juce::String err;
         r.loadPresetText (juce::String::fromUTF8 (factory::presets[6].json), "g.json", err);
-        r.set ("sibGuard", guard);
+        r.set ("sibGuard", guard); r.set ("lowCut", lowCut);
         r.set ("revOn", 0.0f); r.set ("dlyOn", 0.0f);   // dry path only (the outlier's reverb tail is also quieter, as it should)
         r.learnAndMatch (vox);    // learned on the normal take
         r.p->prepareToPlay (fs, 256);
@@ -334,6 +335,21 @@ static void suiteGuard()
     auto offN = render (vox, 0.0f), onN = render (vox, 1.0f);
     check (measure (offN, fs).hash == measure (onN, fs).hash || std::abs (measure (offN, fs).high - measure (onN, fs).high) < 0.05,
            "take without an outlier: same sound with and without the guard");
+    // v3.1: with the LOW CUT the guard's vowel reference no longer includes what lies under the voice, so it reads
+    // the synthetic take's sibilants a little higher. Real takes: no difference (SUNO MATCH s/z identical with the
+    // guard on / off). Here: the outlier is still pulled down, the rest moves by a fraction of a dB at most.
+    lowCut = 1.0f;
+    auto offC = render (loud, 0.0f), onC = render (loud, 1.0f);
+    const double cutC = hfDb (offC, a0, a1) - hfDb (onC, a0, a1);
+    check (cutC > 3.0, "with the LOW CUT: outlier sibilant pulled down (" + juce::String (cutC, 1) + " dB above 3 kHz)");
+    double worstC = 0;
+    for (double t = 0.3; t < 11.5; t += 0.3)
+    {
+        const int s0 = (int) (t * fs), s1 = (int) ((t + 0.06) * fs);
+        if (s1 > (int) (6.9 * fs) && s0 < (int) (7.6 * fs)) continue;
+        worstC = std::max (worstC, std::abs (hfDb (offC, s0, s1) - hfDb (onC, s0, s1)));
+    }
+    check (worstC < 0.6, "with the LOW CUT: normal sibilants within 0.6 dB (largest change " + juce::String (worstC, 2) + " dB)");
 }
 
 static void suitePresets()
@@ -342,10 +358,21 @@ static void suitePresets()
     const double fs = 44100; auto vox = makeVocal (fs, 12.0);
     for (const auto& fp : factory::presets)
     {
-        // SILK (what the factory preset asks for since v2.9): its own golden entries
+        // LOW CUT (what the factory preset asks for since v3.1): its own golden entries
+        {
+            Rig c (fs, 256); juce::String err;
+            c.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
+            check (c.get ("lowCut") == 1.0f, juce::String (fp.file) + ": factory preset uses the LOW CUT");
+            c.learnAndMatch (vox);
+            auto outC = c.run (vox);
+            finiteAndSane (outC, fs, juce::String (fp.file) + " LOW CUT");
+            compareGolden (juce::String ("lowcut_") + fp.file, measure (outC, fs, c.p->getLatencySamples()));
+        }
+        // SILK without the low cut (= v2.9 - v3.0): must keep its golden entries
         {
             Rig k (fs, 256); juce::String err;
             k.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
+            k.set ("lowCut", 0.0f);
             {   // v3.0: SILK per preset (male average family 2 dB, the rest 3 dB, set from the SUNO MATCH tone row)
                 const float want = (float) (double) juce::JSON::parse (juce::String::fromUTF8 (fp.json)).getProperty ("user", {}).getProperty ("silk_db", 3.0);
                 check (want >= 1.5f && want <= 3.0f && std::abs (k.get ("silk") - want) < 0.01f,
@@ -361,7 +388,7 @@ static void suitePresets()
             Rig t (fs, 256); juce::String err;
             t.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (t.get ("widthTiming") == 1.0f, juce::String (fp.file) + ": factory preset uses the WIDTH TIMING");
-            t.set ("silk", 0.0f);
+            t.set ("silk", 0.0f); t.set ("lowCut", 0.0f);
             t.learnAndMatch (vox);
             auto outT = t.run (vox);
             finiteAndSane (outT, fs, juce::String (fp.file) + " WIDTH TIMING");
@@ -372,7 +399,7 @@ static void suitePresets()
             Rig y (fs, 256); juce::String err;
             y.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (y.get ("sylComp") == 100.0f, juce::String (fp.file) + ": factory preset uses the SYLLABLE LEVELER");
-            y.set ("widthTiming", 0.0f); y.set ("silk", 0.0f);
+            y.set ("widthTiming", 0.0f); y.set ("silk", 0.0f); y.set ("lowCut", 0.0f);
             y.learnAndMatch (vox);
             auto outY = y.run (vox);
             finiteAndSane (outY, fs, juce::String (fp.file) + " SYLLABLE LEVELER");
@@ -383,7 +410,7 @@ static void suitePresets()
             Rig w (fs, 256); juce::String err;
             w.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (w.get ("widthEnv") == 100.0f, juce::String (fp.file) + ": factory preset uses the WIDTH ENVELOPE");
-            w.set ("sylComp", 0.0f); w.set ("widthTiming", 0.0f); w.set ("silk", 0.0f);
+            w.set ("sylComp", 0.0f); w.set ("widthTiming", 0.0f); w.set ("silk", 0.0f); w.set ("lowCut", 0.0f);
             w.learnAndMatch (vox);
             auto outW = w.run (vox);
             finiteAndSane (outW, fs, juce::String (fp.file) + " WIDTH ENVELOPE");
@@ -394,7 +421,7 @@ static void suitePresets()
             Rig v (fs, 256); juce::String err;
             v.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (v.get ("eqVowel") == 1.0f, juce::String (fp.file) + ": factory preset uses the VOWEL EQ");
-            v.set ("widthEnv", 0.0f); v.set ("sylComp", 0.0f); v.set ("widthTiming", 0.0f); v.set ("silk", 0.0f);
+            v.set ("widthEnv", 0.0f); v.set ("sylComp", 0.0f); v.set ("widthTiming", 0.0f); v.set ("silk", 0.0f); v.set ("lowCut", 0.0f);
             v.learnAndMatch (vox);
             auto outV = v.run (vox);
             finiteAndSane (outV, fs, juce::String (fp.file) + " VOWEL");
@@ -406,7 +433,7 @@ static void suitePresets()
             e.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (e.get ("eqExact") == 1.0f, juce::String (fp.file) + ": factory preset uses the EXACT EQ solver");
             check (e.get ("sibGuard") == 1.0f, juce::String (fp.file) + ": factory preset uses the SIBILANT GUARD");
-            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f); e.set ("sylComp", 0.0f); e.set ("widthTiming", 0.0f); e.set ("silk", 0.0f);
+            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f); e.set ("sylComp", 0.0f); e.set ("widthTiming", 0.0f); e.set ("silk", 0.0f); e.set ("lowCut", 0.0f);
             e.learnAndMatch (vox);
             auto outE = e.run (vox);
             finiteAndSane (outE, fs, juce::String (fp.file) + " EXACT");
@@ -418,7 +445,7 @@ static void suitePresets()
         const bool ok = r.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
         check (ok, juce::String (fp.file) + ": loads (" + err + ")");
         if (! ok) continue;
-        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f); r.set ("sylComp", 0.0f); r.set ("widthTiming", 0.0f); r.set ("silk", 0.0f);   // = v2.0
+        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f); r.set ("sylComp", 0.0f); r.set ("widthTiming", 0.0f); r.set ("silk", 0.0f); r.set ("lowCut", 0.0f);   // = v2.0
         r.learnAndMatch (vox);
         auto out = r.run (vox);
         finiteAndSane (out, fs, fp.file);
@@ -609,6 +636,15 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             d8.p->setStateInformation (legacy8.getData(), (int) legacy8.getSize());
             check (d8.get ("silk") == 0.0f, "session from before v2.9 restores with SILK 0 dB");
         }
+        {
+            Rig d9 (fs, 256);
+            auto x15 = xmlOf (s1);
+            for (auto* e = x15->getFirstChildElement(); e != nullptr; e = e->getNextElement())
+                if (e->getStringAttribute ("id") == "lowCut") { x15->removeChildElement (e, true); break; }
+            auto legacy9 = blobOf (*x15);
+            d9.p->setStateInformation (legacy9.getData(), (int) legacy9.getSize());
+            check (d9.get ("lowCut") == 0.0f, "session from before v3.1 restores with the LOW CUT off");
+        }
         Rig fresh (fs, 256);
         check (fresh.get ("eqExact") == 1.0f, "a new instance uses the EXACT EQ solver");
         check (fresh.get ("eqVowel") == 1.0f, "a new instance uses the VOWEL EQ");
@@ -616,6 +652,7 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
         check (fresh.get ("sylComp") == 100.0f, "a new instance uses the SYLLABLE LEVELER");
         check (fresh.get ("widthTiming") == 1.0f, "a new instance uses the WIDTH TIMING");
         check (std::abs (fresh.get ("silk") - 3.0f) < 0.01f, "a new instance uses SILK 3 dB");
+        check (fresh.get ("lowCut") == 1.0f, "a new instance uses the LOW CUT");
     }
     {   // installed factory presets from v2.0 (no breath entry, never edited) are refreshed; edited copies are not
         auto dir = SunoChainProcessor::presetFolder();
@@ -715,6 +752,10 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             if (auto* q = x14["user"].getDynamicObject()) q->removeProperty ("silk_db");
             Rig e12 (fs, 256); e12.loadPresetText (juce::JSON::toString (x14), "old_silk.json", err);
             check (e12.get ("silk") == 0.0f, "preset without user.silk_db (before v2.9) loads with SILK 0 dB");
+            auto x16 = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[6].json));
+            if (auto* q = x16["user"].getDynamicObject()) q->removeProperty ("low_cut");
+            Rig e13 (fs, 256); e13.loadPresetText (juce::JSON::toString (x16), "old_lowcut.json", err);
+            check (e13.get ("lowCut") == 0.0f, "preset without user.low_cut (before v3.1) loads with the LOW CUT off");
             tmp.deleteFile();
         }
         Rig f2 (fs, 256);
@@ -885,15 +926,43 @@ static void suiteLatency()
     }
 }
 
+static void suiteLowCut()
+{
+    std::printf ("[lowcut] LOW CUT: corner under the lowest sung note, room rumble does not move it, rumble removed\n");
+    const double fs = 44100; auto vox = makeVocal (fs, 12.0);   // lowest note 131 Hz (vibrato down to ~129 Hz)
+    auto rumbly = vox;
+    for (int ch = 0; ch < rumbly.getNumChannels(); ++ch)
+        for (int i = 0; i < rumbly.getNumSamples(); ++i)
+            rumbly.addSample (ch, i, 0.05f * (float) std::sin (2 * juce::MathConstants<double>::pi * 38.0 * i / fs));
+    Rig a (fs, 256); a.learnAndMatch (vox);
+    const float ca = a.p->getCurves().lowCutHz;
+    check (ca > 84.0f && ca < 95.0f, "learned corner 0.7 x the lowest note (" + juce::String (ca, 1) + " Hz, expected ~90)");
+    Rig b (fs, 256); b.learnAndMatch (rumbly);
+    const float cb = b.p->getCurves().lowCutHz;
+    check (std::abs (cb - ca) < 3.0f, "38 Hz rumble does not move the corner (" + juce::String (cb, 1) + " Hz)");
+    auto tone = [&] (const juce::AudioBuffer<float>& x, double f)
+    {
+        double c = 0, s2 = 0;
+        for (int i = x.getNumSamples() / 4; i < x.getNumSamples(); ++i)
+        { const double w = 2 * juce::MathConstants<double>::pi * f * i / fs; c += x.getSample (0, i) * std::cos (w); s2 += x.getSample (0, i) * std::sin (w); }
+        return 10 * std::log10 (c * c + s2 * s2 + 1e-30);
+    };
+    auto on = b.run (rumbly); b.set ("lowCut", 0.0f); auto off = b.run (rumbly);
+    const double cut = tone (off, 38.0) - tone (on, 38.0), keep = tone (off, 131.0) - tone (on, 131.0);
+    check (cut > 20.0, "38 Hz rumble cut by " + juce::String (cut, 1) + " dB");
+    check (std::abs (keep) < 1.5, "lowest note (131 Hz) changed by " + juce::String (keep, 2) + " dB");
+}
+
 static void suiteSwitch()
 {
-    std::printf ("[switch] BLACK and FREEZE toggles while singing: no click\n");
+    std::printf ("[switch] BLACK, FREEZE and LOW CUT toggles while singing: no click\n");
     const double fs = 44100; auto vox = makeVocal (fs, 10.0);
     Rig r (fs, 256);
     r.learnAndMatch (vox);
     const int nb = vox.getNumSamples() / 256;
     struct Ev { int block; const char* id; float v; };
-    const Ev evs[] = { { nb / 5, "revBlack", 1 }, { 2 * nb / 5, "revFreeze", 1 }, { 3 * nb / 5, "revFreeze", 0 }, { 4 * nb / 5, "revBlack", 0 } };
+    const Ev evs[] = { { nb / 7, "lowCut", 0 }, { 2 * nb / 7, "revBlack", 1 }, { 3 * nb / 7, "revFreeze", 1 }, { 4 * nb / 7, "revFreeze", 0 },
+                       { 5 * nb / 7, "revBlack", 0 }, { 6 * nb / 7, "lowCut", 1 } };
     auto out = r.run (vox, [&] (int b) { for (auto& e : evs) if (b == e.block) r.set (e.id, e.v); });
     // compare the sharpest step around each toggle with the sharpest steps of the music elsewhere
     auto d2 = [&] (int i) { return std::abs (out.getSample (0, i) - 2 * out.getSample (0, i - 1) + out.getSample (0, i - 2)); };
@@ -970,6 +1039,7 @@ int main (int argc, char** argv)
     if (want ("realtime")) suiteRealtime();
     if (want ("concurrent")) suiteConcurrent();
     if (want ("latency")) suiteLatency();
+    if (want ("lowcut")) suiteLowCut();
     if (want ("switch")) suiteSwitch();
     if (only.contains ("cpu")) suiteCpu();
     if (writeGolden != juce::File())

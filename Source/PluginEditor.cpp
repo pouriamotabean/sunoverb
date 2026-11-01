@@ -420,6 +420,18 @@ void Display::paintEq (juce::Graphics& g, juce::Rectangle<float> r)
         g.setGradientFill (gf); g.fillPath (fill);
         glowPath (g, line, col::green, 1.4f);
     }
+    if (snap.lowCutHz > 0)
+    {   // v3.1 LOW CUT: its own slope (fine steps; the band points are too coarse for a 24 dB/oct edge)
+        sc::Biquad a, b; a.setHPF (snap.sampleRate, snap.lowCutHz, sc::kLowCutQ1); b.setHPF (snap.sampleRate, snap.lowCutHz, sc::kLowCutQ2);
+        juce::Path lc; bool first = true;
+        for (float f = fLo; f <= 400.0f; f *= 1.03f)
+        {
+            const float d = (float) (a.magDb (snap.sampleRate, f) + b.magDb (snap.sampleRate, f));
+            if (first) lc.startNewSubPath (X (f), Y (d)); else lc.lineTo (X (f), Y (d));
+            first = false;
+        }
+        glowPath (g, lc, col::green.withAlpha (0.7f), 1.2f);
+    }
     if (snap.hasSource) glowPath (g, smoothPath (points (snap.source)), col::cream, 1.5f);
     if (snap.hasTarget) glowPath (g, smoothPath (points (snap.target)), col::amber, 1.8f);
 
@@ -433,6 +445,7 @@ void Display::paintEq (juce::Graphics& g, juce::Rectangle<float> r)
     item (col::amber, "Target", snap.hasTarget);
     item (col::cream, "Your voice", snap.hasSource);
     item (col::green, "Applied EQ", corr);
+    if (snap.lowCutHz > 0) item (col::green.withAlpha (0.7f), "Low cut " + juce::String (juce::roundToInt (snap.lowCutHz)) + " Hz", true);
     if (! snap.hasSource)
         drawCaps (g, "Learn your voice to see the match", plot.withTrimmedTop (plot.getHeight() * 0.62f).withHeight (16), col::dim.withAlpha (0.8f), 10.0f);
 }
@@ -783,7 +796,7 @@ void Root::paint (juce::Graphics& g)
             g.fillRoundedRectangle (bx - 1.0f, cy - h / 2, 2.0f, h, 1.0f);
         }
         g.setFont (inter (21.0f, 500)); g.drawText ("suno chain", juce::Rectangle<float> (x + 44, cy - 18, 230, 28), juce::Justification::centredLeft, false);
-        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("3.0.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
+        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("3.1.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
         g.setColour (col::dim); g.setFont (inter (10.5f)); g.drawText ("by pouria motabean", juce::Rectangle<float> (x + 45, cy + 9, 230, 14), juce::Justification::centredLeft, false);
     }
 }

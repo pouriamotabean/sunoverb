@@ -69,6 +69,11 @@ struct Params
     // measurements (vowels ~2.5 dB darker than Suno at 10 kHz, sibilants 2-5 dB softer re the vowel) point to the
     // same lift. Half of it on sibilants: at full lift the loudest peaks became s / sh (+2 dB). 0 dB = before v2.9.
     float silkDb = 0.0f;   // excAmount = SATURATION (v1.12: crisp depth)
+    // v3.1 LOW CUT: 24 dB/oct high-pass at the very start, under the singer's lowest note (learned: 0.7 x the lowest
+    // sung pitch, 40-150 Hz; 60 Hz before a Learn). Suno's stems have nothing below the voice but a floor ~25 dB
+    // down; our takes had 9-20 dB more there (room rumble, handling, plosive thumps). Kept out of Learn's closed
+    // loop like SILK. false = before v3.1.
+    bool lowCut = false; float lowCutHz = 0.0f;
     float crispDepth = 1.3f;        // v1.13: SATURATION 100 % = the 130 % of v1.12 (Pouria's sweet spot)
     bool useExciter = false;        // v1.11 exciter, off since v1.12   // v1.11 harmonic exciter (amount 1 = fitted to Suno)
     bool rideOn = true; float rideRangeDb = 2.0f, rideAmount = 0.25f, rideSpeedMs = 300.0f;   // v1.13 vocal rider (replaces the leveler)
@@ -387,6 +392,19 @@ struct MatchEQ
     inline float process (float x, int ch) { for (auto& b : bands) x = b.process (x, ch); return x; }
     double responseDb (double f) const { double r = 0; for (auto& b : bands) r += b.magDb (fs, f); return r; }
 };
+
+// v3.1 LOW CUT: 4th-order Butterworth high-pass (two biquads). 0 Hz = no Learn yet -> 60 Hz (under any sung note)
+constexpr float kLowCutDefaultHz = 60.0f;
+inline float lowCutCorner (float learnedHz) { return learnedHz > 1.0f ? std::clamp (learnedHz, 40.0f, 150.0f) : kLowCutDefaultHz; }
+constexpr double kLowCutQ1 = 0.54119610, kLowCutQ2 = 1.30656296;
+inline std::array<float, kNumBands> lowCutResponse (double fs, bool on, float learnedHz)
+{
+    std::array<float, kNumBands> r {};
+    if (! on) return r;
+    Biquad a, b; a.setHPF (fs, lowCutCorner (learnedHz), kLowCutQ1); b.setHPF (fs, lowCutCorner (learnedHz), kLowCutQ2);
+    for (int i = 0; i < kNumBands; ++i) r[(size_t) i] = (float) (a.magDb (fs, bandCenters()[(size_t) i]) + b.magDb (fs, bandCenters()[(size_t) i]));
+    return r;
+}
 
 // v2.9 SILK shelf and its response per band (for Learn: the closed loop must not take it back)
 constexpr double kSilkHz = 4120.0, kSilkQ = 0.61;
@@ -1189,6 +1207,11 @@ struct Learner
     std::vector<std::complex<float>> buf, bufOut;
     std::vector<float> window;
     SibilantAnalyzer sib;
+    // v3.1 LOW CUT: pitch of each frame (0 = not clearly periodic), autocorrelation via a zero-padded FFT,
+    // normalised by the window's own autocorrelation (Boersma) so low notes are not under-counted
+    std::vector<float> frameF0;
+    std::vector<std::complex<float>> acBuf;
+    std::vector<float> winAc;
 
     void prepare (double s)
     {
@@ -1198,6 +1221,53 @@ struct Learner
         blockRms.assign (kMaxBlocks, -200.0f); blockPeak.assign (kMaxBlocks, -200.0f);
         fifo.assign (kFft, 0.0f); buf.assign (kFft, {}); window.resize (kFft);
         for (int i = 0; i < kFft; ++i) window[(size_t) i] = (float) (0.5 - 0.5 * std::cos (2 * kPi * i / (kFft - 1)));
+        frameF0.assign (kMaxFrames, 0.0f); acBuf.assign (2 * kFft, {}); winAc.assign (kFft, 0.0f);
+        for (int i = 0; i < 2 * kFft; ++i) acBuf[(size_t) i] = { i < kFft ? window[(size_t) i] : 0.0f, 0.0f };
+        autocorr();
+        for (int i = 0; i < kFft; ++i) winAc[(size_t) i] = acBuf[(size_t) i].real() / std::max (1e-20f, acBuf[0].real());
+    }
+    // acBuf (time signal, zero-padded) -> its autocorrelation in acBuf[].real() (unnormalised)
+    // hpHz > 0: the bins under it are left out (room rumble under the voice must not read as a sung pitch; the
+    // period of a low note still shows through its harmonics)
+    void autocorr (double hpHz = 0)
+    {
+        fft (acBuf);
+        const int n = (int) acBuf.size(), kc = (int) std::ceil (hpHz * n / fs);
+        for (int k = 0; k < n; ++k) acBuf[(size_t) k] = { (k < kc || n - k < kc) ? 0.0f : std::norm (acBuf[(size_t) k]), 0.0f };
+        fft (acBuf);   // the power spectrum is real and even: forward FFT = N x inverse FFT
+    }
+    // pitch of the frame now in fifo (Hz), 0 if not clearly periodic (55 - 700 Hz)
+    float framePitch()
+    {
+        for (int i = 0; i < 2 * kFft; ++i) acBuf[(size_t) i] = { i < kFft ? fifo[(size_t) i] * window[(size_t) i] : 0.0f, 0.0f };
+        autocorr (120.0);
+        const float r0 = acBuf[0].real();
+        if (! (r0 > 1e-12f)) return 0.0f;
+        const int lo = (int) (fs / 700.0), hi = std::min (kFft / 2, (int) (fs / 55.0));
+        auto r = [&] (int k) { return acBuf[(size_t) k].real() / r0 / std::max (0.05f, winAc[(size_t) k]); };
+        int best = lo; float rb = -1;
+        for (int k = lo; k <= hi; ++k) { const float v = r (k); if (v > rb) { rb = v; best = k; } }
+        if (rb < 0.6f) return 0.0f;
+        for (int k = lo + 1; k < hi; ++k)   // the shortest period with (almost) the best peak: no octave-down picks
+        {
+            const float v = r (k);
+            if (v >= 0.9f * rb && v >= r (k - 1) && v >= r (k + 1)) { best = k; break; }
+        }
+        return (float) (fs / best);
+    }
+    // the singer's lowest note in the learned part (1st percentile of the loud periodic frames), 0 if too few
+    float lowestPitch() const
+    {
+        const int nf = nFrames.load();
+        if (nf < 20) return 0.0f;
+        std::vector<float> lv (frameLevel.begin(), frameLevel.begin() + nf);
+        auto sorted = lv; std::sort (sorted.begin(), sorted.end());
+        const float p95 = sorted[(size_t) (0.95 * (nf - 1))];
+        std::vector<float> f0;
+        for (int f = 0; f < nf; ++f) if (frameF0[(size_t) f] > 0 && lv[(size_t) f] > p95 - 20) f0.push_back (frameF0[(size_t) f]);
+        if (f0.size() < 30) return 0.0f;
+        std::sort (f0.begin(), f0.end());
+        return f0[(size_t) (0.01 * (f0.size() - 1))];
     }
     void start() { nFrames = 0; nBlocks = 0; fifoPos = 0; blockPos = 0; bSum = 0; bPeak = 0; sib.reset(); active = true; }
     void stop() { active = false; }
@@ -1235,6 +1305,7 @@ struct Learner
             for (int i = 0; i < kFft; ++i) bufOut[(size_t) i] = { fifoOut[(size_t) i] * window[(size_t) i], 0.0f };
             fft (bufOut);
             frameLevel[(size_t) f] = (float) (10 * std::log10 (e / kFft + 1e-20));
+            frameF0[(size_t) f] = framePitch();
             const auto& fc = bandCenters();
             for (int b = 0; b < kNumBands; ++b)
             {
@@ -1949,6 +2020,7 @@ public:
     DeEsser deess;
     SibCeiling sibCeil; DelayLine laRaw; SibGuard sibGuard;   // v2.0.4
     Crisp crisp; Biquad airShelf, silkShelf; float airShelfDb = 0, silkShelfDb = 0, silkW = 1, silkWC = 0;
+    Biquad lowCut1, lowCut2; float lowCutMix = 0, lowCutC = 0, lowCutHzNow = -1; bool lowCutOn = false;   // v3.1 LOW CUT (10 ms fade on / off)
     Biquad silkTHp1, silkTHp2; float silkTF = 0, silkTS = 0, silkTFC = 0, silkTSC = 0; int silkTHold = 0, silkTHoldLen = 0;   // v2.9 SILK transient detector
     ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
     StereoDelay delay;
@@ -2001,6 +2073,7 @@ public:
         sylFC = msToCoef (15.0f, fs); sylRefC = msToCoef (400.0f, fs); sylUpC = msToCoef (30.0f, fs); sylGC = msToCoef (8.0f, fs); sylRelC = msToCoef (150.0f, fs);
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs); sibGuard.prepare (fs);
         excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset(); silkShelf.reset(); silkW = 1; silkWC = msToCoef (2.0f, fs);
+        lowCut1.reset(); lowCut2.reset(); lowCutMix = 0; lowCutHzNow = -1; lowCutC = msToCoef (10.0f, fs);
         silkTHp1.setHPF (fs, 3000.0); silkTHp2.setHPF (fs, 3000.0); silkTHp1.reset(); silkTHp2.reset(); silkTF = silkTS = 0; silkTHold = 0;
         silkTFC = msToCoef (0.5f, fs); silkTSC = msToCoef (15.0f, fs); silkTHoldLen = (int) (0.012 * fs);
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
@@ -2164,6 +2237,10 @@ public:
         satDrive = dbToGain (p.satDriveDb); satMix = 0.0f;   // v1.11: the tanh saturation is replaced by the harmonic exciter
         airShelf.setHighShelf (fs, 10000.0, p.airDb, 0.6); airShelfDb = p.airDb;
         silkShelf.setHighShelf (fs, kSilkHz, p.silkDb, kSilkQ); silkShelfDb = p.silkDb;
+        lowCutOn = p.lowCut;
+        if (const float hz = lowCutCorner (p.lowCutHz); hz != lowCutHzNow)
+        { lowCut1.setHPF (fs, hz, kLowCutQ1); lowCut2.setHPF (fs, hz, kLowCutQ2); lowCutHzNow = hz; }
+        if (lowCutOn && lowCutMix == 0.0f) { lowCut1.reset(); lowCut2.reset(); }
         excGainA = std::max (0.0f, p.excAmount) * amt * dbToGain (p.excAdb);
         excGainB = std::max (0.0f, p.excAmount) * amt * dbToGain (p.excBdb + p.airDb);
 
@@ -2219,6 +2296,12 @@ public:
             pkIn = std::max (pkIn, std::max (std::abs (l), std::abs (r)));
             const float rawMono = 0.5f * (l + r);
             l *= inGain; r *= inGain;
+            if (lowCutOn || lowCutMix > 0.0f)   // v3.1 LOW CUT (off = untouched, bit-exact)
+            {
+                lowCutMix = lowCutOn ? 1.0f - lowCutC * (1.0f - lowCutMix) : (lowCutMix * lowCutC < 1e-4f ? 0.0f : lowCutMix * lowCutC);
+                const float hl = lowCut2.process (lowCut1.process (l, 0), 0), hr = lowCut2.process (lowCut1.process (r, 1), 1);
+                l += (hl - l) * lowCutMix; r += (hr - r) * lowCutMix;
+            }
             const float preL = l, preR = r;
             l = eq.process (l, 0) * eqMakeup; r = eq.process (r, 1) * eqMakeup;
             // v1.7: compressors act on the signal as it is output (no pre-ducking); only S/Z detection looks 5 ms ahead

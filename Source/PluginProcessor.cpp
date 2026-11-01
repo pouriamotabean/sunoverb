@@ -217,6 +217,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     // v2.9: SILK (broad Baxandall-like top lift, not taken back by Learn). 3 dB for new sessions and the factory
     // presets; 0 dB for sessions / presets saved before v2.9 (their sound).
     p.push_back (std::make_unique<APF> (juce::ParameterID { "silk", 17 }, "Silk", NRange (0, 6), 3.0f, dB));
+    // v3.1: LOW CUT (24 dB/oct under the singer's lowest note, the corner comes from Learn). On for new sessions and
+    // the factory presets; off for sessions / presets saved before v3.1 (their sound).
+    p.push_back (std::make_unique<APB> (juce::ParameterID { "lowCut", 18 }, "Low Cut", true));
     return { p.begin(), p.end() };
 }
 
@@ -260,7 +263,7 @@ void SunoChainProcessor::installFactoryPresets()
         // entries added after v2.0 (a whole section when the second name is empty)
         static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" }, { "eq", "vowel" }, { "eq", "target_curve_voiced_db" },
                                           { "width_env", "" }, { "dynamics", "syllable_amount" }, { "dynamics", "syllable_ratio" },
-                                          { "width_layer", "timing" }, { "user", "silk_db" } };
+                                          { "width_layer", "timing" }, { "user", "silk_db" }, { "user", "low_cut" } };
         bool missing = false;
         for (auto& a : added)
         {
@@ -356,6 +359,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.sylAmount = v ("sylComp") / 100.0f;
     p.widthTiming = v ("widthTiming") > 0.5f;
     p.silkDb = v ("silk");
+    p.lowCut = v ("lowCut") > 0.5f;
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -519,6 +523,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
         set ("sylComp", num (json, "dynamics.syllable_amount", 0.0) * 100.0);   // v2.3: likewise
         set ("widthTiming", num (json, "width_layer.timing", 0.0));   // v2.8: likewise
         set ("silk", num (json, "user.silk_db", 0.0));   // v2.9: likewise
+        set ("lowCut", num (json, "user.low_cut", 0.0));   // v3.1: likewise
     dirty = true;
     return true;
 }
@@ -587,6 +592,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "dynamics.syllable_amount", v ("sylComp") / 100.0);
     put (j, "width_layer.timing", v ("widthTiming") > 0.5);
     put (j, "user.silk_db", v ("silk"));
+    put (j, "user.low_cut", v ("lowCut") > 0.5);
     put (j, "reverb.band_width_db", toVarArray (std::array<float, 3> { (float) v ("rwLow"), (float) v ("rwMid"), (float) v ("rwHigh") }));
     put (j, "width_layer.band_db", toVarArray (std::array<float, 3> { (float) v ("lwLow"), (float) v ("lwMid"), (float) v ("lwHigh") }));
     put (j, "delay.band_width_db", toVarArray (std::array<float, 3> { (float) v ("dwLow"), (float) v ("dwMid"), (float) v ("dwHigh") }));
@@ -733,7 +739,9 @@ void SunoChainProcessor::startLearn()
         learnAppliedCorr = sc::computeCorrection (bp);
         // v2.9: SILK is a deliberate lift after the EQ: Learn counts it as applied, so the closed loop leaves it alone
         const auto silk = sc::silkResponse (getSampleRate() > 0 ? getSampleRate() : 48000.0, bp.silkDb);
-        for (size_t b = 0; b < learnAppliedCorr.size(); ++b) learnAppliedCorr[b] += silk[b];
+        // v3.1: so is the LOW CUT (a deliberate cut under the voice)
+        const auto lc = sc::lowCutResponse (getSampleRate() > 0 ? getSampleRate() : 48000.0, bp.lowCut, bp.lowCutHz);
+        for (size_t b = 0; b < learnAppliedCorr.size(); ++b) learnAppliedCorr[b] += silk[b] + lc[b];
     }
     chain.startLearn();
 }
@@ -767,6 +775,14 @@ bool SunoChainProcessor::stopLearn (juce::String& message)
         hidden.hasSourceV = okV; hidden.hasChainEffectV = okV;
         if (okV) { hidden.sourceCurveV = cv; hidden.chainEffectV = sc::Learner::chainEffectFrom (cv, ov, learnAppliedCorr); }
     }
+    // v3.1 LOW CUT: the corner sits under the lowest note you sang (0.7 x, i.e. a fifth below)
+    const float lowNote = chain.learner.lowestPitch();
+    float lowCutHz = 0.0f;
+    {
+        const juce::SpinLock::ScopedLockType sl (presetLock);
+        if (lowNote > 0.0f) hidden.lowCutHz = 0.7f * lowNote;
+        lowCutHz = sc::lowCutCorner (hidden.lowCutHz);
+    }
     std::array<float, 10> sib {};
     const int nSib = chain.learner.sib.summarise (sib);
     {
@@ -778,6 +794,7 @@ bool SunoChainProcessor::stopLearn (juce::String& message)
     message = "Learned: level " + juce::String (level, 1) + " dBFS, crest " + juce::String (crest, 1)
               + " dB, spread " + juce::String (spread, 1) + " dB, "
               + (nSib >= 3 ? juce::String (nSib) + " s/z sounds" : juce::String ("too few s/z sounds (learn a longer part)"))
+              + ", low cut " + juce::String (juce::roundToInt (lowCutHz)) + " Hz"
               + ". RE-LEARN once more to refine the EQ.";
     return true;
 }
@@ -814,6 +831,7 @@ void SunoChainProcessor::clearLearn()
         const juce::SpinLock::ScopedLockType sl (presetLock);
         hidden.hasSource = false; hidden.hasSourceLevel = false; hidden.sourceCrestDb = 0; hidden.sourceSpreadDb = 0;
         hidden.hasSibSource = false; hidden.hasChainEffect = false; hidden.hasSourceV = false; hidden.hasChainEffectV = false;
+        hidden.lowCutHz = 0.0f;
     }
     dirty = true;
 }
@@ -828,6 +846,8 @@ SunoChainProcessor::CurveSnapshot SunoChainProcessor::getCurves() const
     s.correction = sc::computeCorrection (p);
     s.sourceLevel = p.sourceLevelDb; s.sourceCrest = p.sourceCrestDb; s.targetCrest = p.targetCrestDb;
     s.widthTargetSing = widthTargetSing; s.widthTargetGap = widthTargetGap; s.hasWidthTarget = hasWidthTarget;
+    s.lowCutHz = p.lowCut ? sc::lowCutCorner (p.lowCutHz) : 0.0f;
+    s.sampleRate = getSampleRate() > 0 ? getSampleRate() : 48000.0;
     return s;
 }
 
@@ -926,6 +946,7 @@ void SunoChainProcessor::getStateInformation (juce::MemoryBlock& destData)
         extra.setProperty ("hasSourceV", hidden.hasSourceV, nullptr);   // v2.1 VOWEL EQ
         extra.setProperty ("sourceCurveV", arrToString (hidden.sourceCurveV), nullptr);
         extra.setProperty ("chainEffectV", arrToString (hidden.chainEffectV), nullptr);
+        extra.setProperty ("lowCutHz", hidden.lowCutHz, nullptr);   // v3.1 LOW CUT (learned corner, 0 = none)
     }
     state.removeChild (state.getChildWithName ("EXTRA"), nullptr);
     state.appendChild (extra, nullptr);
@@ -953,7 +974,7 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             // BREATH arrived in v1.15.1 with a 40 % default: an older session had no breath control at all
             // the EXACT EQ solver arrived in v2.0.2: an older session keeps the LEGACY one (its sound)
             const auto pid = r->getParameterID();
-            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard" || pid == "eqVowel" || pid == "widthEnv" || pid == "sylComp" || pid == "widthTiming" || pid == "silk") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
+            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard" || pid == "eqVowel" || pid == "widthEnv" || pid == "sylComp" || pid == "widthTiming" || pid == "silk" || pid == "lowCut") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
             juce::ValueTree c ("PARAM"); c.setProperty ("id", r->getParameterID(), nullptr); c.setProperty ("value", legacy, nullptr);
             state.appendChild (c, nullptr);
             continue;
@@ -999,6 +1020,7 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
                             && arrFromString (extra.getProperty ("sourceCurveV", "").toString(), hidden.sourceCurveV)
                             && arrFromString (extra.getProperty ("chainEffectV", "").toString(), hidden.chainEffectV);
         hidden.hasChainEffectV = hidden.hasSourceV;
+        hidden.lowCutHz = hidden.hasSource ? (float) finiteOr (extra.getProperty ("lowCutHz", 0.0), 0.0, 1000.0, 0.0) : 0.0f;
     }
     dirty = true;
 }

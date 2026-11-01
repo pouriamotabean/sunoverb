@@ -2,6 +2,7 @@
 # preset_ / black_ (male) and session_v2_0: made with v2.0 (LEGACY EQ solver, no guard) - must stay bit-exact with GCC.
 # exact_ (all) and the female preset_ / black_ entries: made with v2.0.4 (EXACT solver + SIBILANT GUARD on exact_).
 # v3.0.0: the factory preset data was rebuilt from 21 Suno stems, so every entry of an updated preset was regenerated (DSP code unchanged; session_v2_0 and the single-stem legacy entries still match bit-exact).
+# lowcut_: v3.1.0 (LOW CUT on, as the factory presets ask); silk_ and the older blocks are rendered with it off.
 black_Black_Female.json -23.042 -35.261 -27.392 -25.463 -18.637 -1.762 a57866870b0a4bed
 black_Black_Male.json -20.004 -28.078 -21.748 -27.574 -16.180 -1.033 fb836c8c0fdec4be
 black_Blue_Male.json -18.487 -27.226 -19.827 -27.289 -14.640 -0.849 cc2e00197971943b
@@ -99,3 +100,15 @@ silk_Suno_Lead_Reference.json -22.601 -30.037 -23.793 -34.859 -15.431 -7.042 ccb
 silk_Suno_Male.json -17.148 -24.927 -18.287 -29.090 -15.683 -1.308 6ac049715f4e36d4
 silk_Velvet_Female.json -16.912 -23.632 -18.248 -29.751 -18.339 -1.313 f74aeb8fc79c5b1f
 silk_Velvet_Male.json -16.943 -23.893 -18.188 -30.182 -18.320 -1.627 a78ece861873315
+lowcut_Black_Female.json -17.796 -24.411 -19.229 -29.796 -14.308 -1.380 b1382bc2f3e06314
+lowcut_Black_Male.json -18.376 -25.972 -19.533 -30.601 -14.333 -1.574 aeabc278587b9e37
+lowcut_Blue_Male.json -19.185 -27.173 -20.418 -29.727 -13.098 -1.315 7d59ea083015b8e0
+lowcut_Dreamy_Female.json -17.870 -24.489 -19.301 -29.884 -12.080 -1.174 15830aaac33b14b5
+lowcut_Dreamy_Male.json -18.278 -25.877 -19.433 -30.514 -12.095 -1.627 7ac90ef8d1b351e7
+lowcut_Pouria_Signature.json -18.485 -26.086 -19.647 -30.623 -14.502 -1.621 f359d5d84e996c2e
+lowcut_Radio_Male.json -18.779 -28.057 -19.689 -30.256 -14.418 -1.104 9f359fb29c55c9a9
+lowcut_Suno_Female.json -17.729 -24.349 -19.161 -29.730 -14.453 -1.137 5262cc0594fa9114
+lowcut_Suno_Lead_Reference.json -22.832 -30.094 -24.046 -35.355 -15.219 -5.261 86953f1cdca1beb5
+lowcut_Suno_Male.json -18.470 -26.067 -19.627 -30.693 -14.498 -1.647 5d5d169c4f730676
+lowcut_Velvet_Female.json -17.486 -24.038 -18.857 -30.539 -17.077 -1.272 c0a12f07c491cf5b
+lowcut_Velvet_Male.json -18.360 -25.132 -19.641 -31.820 -17.002 -1.052 9463a689e7ff7b38

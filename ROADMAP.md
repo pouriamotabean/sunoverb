@@ -1,6 +1,6 @@
 # Suno Chain – Roadmap
 
-Current version: **v3.0.0** (preset bank rebuilt from 21 Suno stems). v2.9.0: SILK. v2.8.0: WIDTH TIMING. v2.7.0: cleaner face, pages in the display. v2.6.0: new look like ReKit 2. v2.5.0: SUNO MATCH meter. v2.4.0: Dreamy Female, Velvet Female. v2.3.0: SYLLABLE LEVELER. v2.2.0: WIDTH ENVELOPE. v2.1.0: VOWEL EQ. v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
+Current version: **v3.1.0** (LOW CUT under the lowest sung note). v3.0.0: preset bank rebuilt from 21 Suno stems. v2.9.0: SILK. v2.8.0: WIDTH TIMING. v2.7.0: cleaner face, pages in the display. v2.6.0: new look like ReKit 2. v2.5.0: SUNO MATCH meter. v2.4.0: Dreamy Female, Velvet Female. v2.3.0: SYLLABLE LEVELER. v2.2.0: WIDTH ENVELOPE. v2.1.0: VOWEL EQ. v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
 
 ## 1. Next steps (in order)
 1. **Pouria tests v2.0** on his own and other vocals; all sound / GUI issues reported at once and fixed in one release.

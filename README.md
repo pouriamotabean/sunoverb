@@ -1,4 +1,4 @@
-# Suno Chain v3.0.0
+# Suno Chain v3.1.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,26 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v3.1.0 (LOW CUT under the singer's lowest note)
+- Measured below the voice (1/6-octave, loud parts): the Suno stems have nothing there but a floor ~22-28 dB under
+  the mids, flat from 30 Hz up to where the voice starts. Our output had 9-10 dB more on the male takes (a flat
+  plateau 30-100 Hz: room / handling, not the voice) and on the female take a rumble at 30-40 Hz louder than the
+  mids. The Match EQ could not remove it: below 120 Hz it only cuts and it matches vowels, and its bands are too
+  wide for an edge.
+- **LOW CUT** (new host parameter, on for new sessions and the factory presets, off for older ones): a 24 dB/oct
+  high-pass at the very start of the chain. Learn now also finds the lowest note you sang (pitch of every loud
+  frame, rumble left out of the pitch detector, 1st percentile) and puts the corner at 0.7 x that note (a fifth
+  below; 40-150 Hz; 60 Hz before any Learn). The note itself loses ~0.2 dB. Kept out of Learn's closed loop like
+  SILK. The EQ page draws it and shows its frequency.
+- Our takes: corners 98-109 Hz (male, lowest notes ~150 Hz), 144 Hz (female, ~205 Hz). Under the voice: male
+  -15 -> -35 dB, female +1 (30 Hz) -> -42 dB re the mids. The rumble no longer eats the limiter's headroom: MATCH
+  loudness on the male takes -2.2 / -1.2 -> -0.7 / +0.1 dB. Sibilants vs vowels unchanged (+-0.5 dB measured); the
+  MATCH s/z row reads up to 1.4 dB lower because the analyzer's vowel reference no longer includes the rumble (the
+  Suno stems were measured without any) - the sound of s / sh did not change.
+- Not added: a high cut. 13 of the 20 Suno stems fall 25-35 dB between 14 and 16 kHz (Suno's own band limit, like
+  a codec); copying it would only take real air away. Can be added later as a tool (e.g. lo-fi).
+- Older sessions and presets: bit-identical (new golden `lowcut_*`; every older block renders with it off).
+
 ## v3.0.0 (the preset bank rebuilt from 21 Suno stems; the DSP is unchanged)
 - 14 new Suno solo vocals (New folder 1-4). Left out: "1" and "2" in New folder 4 (copies of s1 / s3). Lead Vocals3
   (~40 kbps) gives no spectral target; Lead Vocals10 (almost mono) is not a width reference. Female intros removed:

@@ -82,6 +82,8 @@ public:
         float sourceLevel = 0, sourceCrest = 0, targetCrest = 0;
         std::array<float, 3> widthTargetSing {}, widthTargetGap {};
         bool hasWidthTarget = false;
+        float lowCutHz = 0;   // v3.1: LOW CUT corner in use (0 = off)
+        double sampleRate = 48000;
     };
     CurveSnapshot getCurves() const;
     struct Meters { float gr1, gr2, duck, in, out, width; double bpm; float delayMs; uint32_t blocks; float deess;
