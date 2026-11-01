@@ -1,4 +1,4 @@
-# Suno Chain v2.2.0
+# Suno Chain v2.3.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,19 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.3.0 (SYLLABLE LEVELER, small)
+- Measured: the syllable peaks were already close to Suno; the real difference is legato. Suno's lines barely dip
+  between / inside syllables (male: 2 % of the singing frames dip > 6 dB under the 400 ms median on voiced sounds,
+  ours 7.5 %; female 3.9 % / 7.3 %). That is how the Suno singer is generated, not a compressor: filling those dips
+  fully would lift breaths, mouth noise and room and sound over-compressed (tested, rejected).
+- **SYLLABLE LEVELER** (new host parameter "Syllable Leveler" 0-150 %, 100 % for new sessions and the factory
+  presets, 0 % for older ones): measured 20 ms ahead, lifts voiced dips and tails toward the syllable level and eases
+  onsets that jump above it (ratio `dynamics.syllable_ratio` 0.75); never on consonants, released in pauses.
+- Result, male (Suno): syllable peaks 2.3 -> 1.5 dB (1.6), onset rise 3.9 -> 3.0 dB (2.4), dips 7.0 -> 6.0 dB (2.9);
+  female: peaks 3.3 -> 2.4 dB (2.2), dips 7.5 -> 6.7 dB (5.0). A small change; Pouria: "nothing unpleasant, keep it".
+- Older sessions and presets: bit-identical (golden `wenv_*`, `vowel_*`, `exact_*`, `preset_*`, `black_*` unchanged;
+  new `syl_*`).
+
 ## v2.2.0 (WIDTH ENVELOPE)
 - Measured on the Suno stems: inside a phrase the vocal gets much wider as it gets quieter (syllable tails, soft
   words). Side minus mid, 150 Hz - 1 kHz, male: -13 dB on the loudest parts, -10 dB at 4-8 dB under them, -4.5 dB at

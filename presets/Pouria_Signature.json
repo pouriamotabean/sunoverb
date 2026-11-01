@@ -111,7 +111,9 @@
    "release_ms": 300.0
   },
   "leveler_factor": 2.099999904632568,
-  "punch": 1.5
+  "punch": 1.5,
+  "syllable_amount": 1.0,
+  "syllable_ratio": 0.75
  },
  "deesser": {
   "method": "sz_match",

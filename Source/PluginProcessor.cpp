@@ -526,6 +526,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
         put (j, "dynamics.target_crest_db", hidden.targetCrestDb);
         put (j, "dynamics.target_spread400_db", hidden.targetSpreadDb);
         put (j, "dynamics.leveler_factor", hidden.levelerFactor);
+        put (j, "dynamics.syllable_ratio", hidden.sylRatio);
         put (j, "loudness.integrated_lufs", targetLufs);
         put (j, "deesser.method", "sz_match");
         put (j, "deesser.sib_curve_db", toVarArray (hidden.sibTarget));

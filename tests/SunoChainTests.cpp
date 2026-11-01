@@ -342,11 +342,22 @@ static void suitePresets()
     const double fs = 44100; auto vox = makeVocal (fs, 12.0);
     for (const auto& fp : factory::presets)
     {
-        // WIDTH ENVELOPE (what the factory preset asks for since v2.2): its own golden entries
+        // SYLLABLE LEVELER (what the factory preset asks for since v2.3): its own golden entries
+        {
+            Rig y (fs, 256); juce::String err;
+            y.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
+            check (y.get ("sylComp") == 100.0f, juce::String (fp.file) + ": factory preset uses the SYLLABLE LEVELER");
+            y.learnAndMatch (vox);
+            auto outY = y.run (vox);
+            finiteAndSane (outY, fs, juce::String (fp.file) + " SYLLABLE LEVELER");
+            compareGolden (juce::String ("syl_") + fp.file, measure (outY, fs, y.p->getLatencySamples()));
+        }
+        // WIDTH ENVELOPE without the syllable leveler (= v2.2): must keep its golden entries
         {
             Rig w (fs, 256); juce::String err;
             w.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (w.get ("widthEnv") == 100.0f, juce::String (fp.file) + ": factory preset uses the WIDTH ENVELOPE");
+            w.set ("sylComp", 0.0f);
             w.learnAndMatch (vox);
             auto outW = w.run (vox);
             finiteAndSane (outW, fs, juce::String (fp.file) + " WIDTH ENVELOPE");
@@ -357,7 +368,7 @@ static void suitePresets()
             Rig v (fs, 256); juce::String err;
             v.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (v.get ("eqVowel") == 1.0f, juce::String (fp.file) + ": factory preset uses the VOWEL EQ");
-            v.set ("widthEnv", 0.0f);
+            v.set ("widthEnv", 0.0f); v.set ("sylComp", 0.0f);
             v.learnAndMatch (vox);
             auto outV = v.run (vox);
             finiteAndSane (outV, fs, juce::String (fp.file) + " VOWEL");
@@ -369,7 +380,7 @@ static void suitePresets()
             e.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (e.get ("eqExact") == 1.0f, juce::String (fp.file) + ": factory preset uses the EXACT EQ solver");
             check (e.get ("sibGuard") == 1.0f, juce::String (fp.file) + ": factory preset uses the SIBILANT GUARD");
-            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f);
+            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f); e.set ("sylComp", 0.0f);
             e.learnAndMatch (vox);
             auto outE = e.run (vox);
             finiteAndSane (outE, fs, juce::String (fp.file) + " EXACT");
@@ -381,7 +392,7 @@ static void suitePresets()
         const bool ok = r.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
         check (ok, juce::String (fp.file) + ": loads (" + err + ")");
         if (! ok) continue;
-        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f);   // = v2.0
+        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f); r.set ("sylComp", 0.0f);   // = v2.0
         r.learnAndMatch (vox);
         auto out = r.run (vox);
         finiteAndSane (out, fs, fp.file);
@@ -545,10 +556,20 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             d5.p->setStateInformation (legacy5.getData(), (int) legacy5.getSize());
             check (d5.get ("widthEnv") == 0.0f, "session from before v2.2 restores with the WIDTH ENVELOPE off");
         }
+        {
+            Rig d6 (fs, 256);
+            auto x9 = xmlOf (s1);
+            for (auto* e = x9->getFirstChildElement(); e != nullptr; e = e->getNextElement())
+                if (e->getStringAttribute ("id") == "sylComp") { x9->removeChildElement (e, true); break; }
+            auto legacy6 = blobOf (*x9);
+            d6.p->setStateInformation (legacy6.getData(), (int) legacy6.getSize());
+            check (d6.get ("sylComp") == 0.0f, "session from before v2.3 restores with the SYLLABLE LEVELER off");
+        }
         Rig fresh (fs, 256);
         check (fresh.get ("eqExact") == 1.0f, "a new instance uses the EXACT EQ solver");
         check (fresh.get ("eqVowel") == 1.0f, "a new instance uses the VOWEL EQ");
         check (fresh.get ("widthEnv") == 100.0f, "a new instance uses the WIDTH ENVELOPE");
+        check (fresh.get ("sylComp") == 100.0f, "a new instance uses the SYLLABLE LEVELER");
     }
     {   // installed factory presets from v2.0 (no breath entry, never edited) are refreshed; edited copies are not
         auto dir = SunoChainProcessor::presetFolder();
@@ -614,6 +635,13 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             e7.set ("widthEnv", 60.0f); juce::String er3; e7.p->savePresetFile (tmp, er3);
             Rig e8 (fs, 256); e8.p->loadPresetFile (tmp, er3);
             check (std::abs (e8.get ("widthEnv") - 60.0f) < 0.01f, "saved preset keeps the WIDTH ENVELOPE amount");
+            auto x10 = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[6].json));
+            if (auto* q = x10["dynamics"].getDynamicObject()) { q->removeProperty ("syllable_amount"); q->removeProperty ("syllable_ratio"); }
+            Rig e9 (fs, 256); e9.loadPresetText (juce::JSON::toString (x10), "old_syl.json", err);
+            check (e9.get ("sylComp") == 0.0f, "preset without dynamics.syllable_amount (before v2.3) loads with the SYLLABLE LEVELER off");
+            e7.set ("sylComp", 70.0f); e7.p->savePresetFile (tmp, er3);
+            Rig e10 (fs, 256); e10.p->loadPresetFile (tmp, er3);
+            check (std::abs (e10.get ("sylComp") - 70.0f) < 0.01f, "saved preset keeps the SYLLABLE LEVELER amount");
             tmp.deleteFile();
         }
         Rig f2 (fs, 256);
