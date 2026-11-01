@@ -1,4 +1,4 @@
-# Suno Chain v2.8.0
+# Suno Chain v2.9.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,20 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.9.0 (SILK)
+- Pouria put a Baxandall tone control after Suno Chain on a female take and heard it "sweeter, velvet, nothing
+  damaged". Measured (with / without): no saturation (the non-linear residue falls on loud parts: it is the mp3's),
+  a broad lift of the top only: +1.0 / +1.5 / +2.4 / +2.9 dB at 3 / 4 / 6.3 / 10 kHz, -0.3 dB at 1 kHz. The
+  measurements had said the same (vowels ~2.5 dB darker than Suno at 10 kHz, sibilants 2-5 dB softer re the vowel).
+- **SILK** (new knob on the TONE page, 0-6 dB, 3 dB for new sessions and the factory presets, 0 for older ones):
+  a Baxandall-like high shelf (4.1 kHz, Q 0.61; fitted to his curve within 0.4 dB), after the S/Z Match, before the
+  SIBILANT GUARD, kept out of Learn's closed loop (the Match EQ does not take it back). Full on vowels, half on
+  s / sh / ch / j (S/Z detector), a quarter on sharp high attacks (t, k, ch bursts, seen 5 ms ahead): at full lift
+  the loudest peaks became those attacks (+2.8 dB), now +1 dB.
+- Result on the same female take: vowels within +-0.6 dB of his Baxandall version (2-12.5 kHz), sibilants 1 dB
+  softer than his. MATCH tone: female -1.8 -> +0.3 dB, male -0.8 -> +1.5 dB; S/Z closer to Suno.
+- Older sessions and presets: bit-identical (new golden `silk_*`).
+
 ## v2.8.0 (WIDTH TIMING)
 - Measured on the Suno stems how the width moves in time around syllable onsets: a phrase that starts after a pause
   (>= 100 ms, 22 dB down) stays almost mono for ~200 ms and opens between 200 and 250 ms (female: side -25..-29 dB

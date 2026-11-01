@@ -62,7 +62,13 @@ struct Params
     // v1.5 Advanced Dynamics (1 = as learned / preset): peak compressor amount, leveler strength, leveler speed
     float peakScale = 1.0f, levelerScale = 1.0f, speedScale = 1.0f, attackScale = 1.0f;
     bool sibCeiling = false, deessRelDetect = false;   // v1.8 experiments, OFF since v1.9 (they ate s/sh/ch in the plugin)
-    float excAmount = 1.0f, excAdb = 6.0f, excBdb = 8.0f, airDb = 0.0f;   // excAmount = SATURATION (v1.12: crisp depth)
+    float excAmount = 1.0f, excAdb = 6.0f, excBdb = 8.0f, airDb = 0.0f;
+    // v2.9 SILK: a broad, Baxandall-like lift of the top (high shelf 4.1 kHz, Q 0.61), after the S/Z Match and before
+    // the SIBILANT GUARD, kept out of Learn's closed loop (the Match EQ does not take it back). Pouria's ear (a
+    // Baxandall tone control after Suno Chain: +1 / +1.5 / +2.4 / +2.9 dB at 3 / 4 / 6.3 / 10 kHz) and the
+    // measurements (vowels ~2.5 dB darker than Suno at 10 kHz, sibilants 2-5 dB softer re the vowel) point to the
+    // same lift. Half of it on sibilants: at full lift the loudest peaks became s / sh (+2 dB). 0 dB = before v2.9.
+    float silkDb = 0.0f;   // excAmount = SATURATION (v1.12: crisp depth)
     float crispDepth = 1.3f;        // v1.13: SATURATION 100 % = the 130 % of v1.12 (Pouria's sweet spot)
     bool useExciter = false;        // v1.11 exciter, off since v1.12   // v1.11 harmonic exciter (amount 1 = fitted to Suno)
     bool rideOn = true; float rideRangeDb = 2.0f, rideAmount = 0.25f, rideSpeedMs = 300.0f;   // v1.13 vocal rider (replaces the leveler)
@@ -381,6 +387,17 @@ struct MatchEQ
     inline float process (float x, int ch) { for (auto& b : bands) x = b.process (x, ch); return x; }
     double responseDb (double f) const { double r = 0; for (auto& b : bands) r += b.magDb (fs, f); return r; }
 };
+
+// v2.9 SILK shelf and its response per band (for Learn: the closed loop must not take it back)
+constexpr double kSilkHz = 4120.0, kSilkQ = 0.61;
+inline std::array<float, kNumBands> silkResponse (double fs, float db)
+{
+    std::array<float, kNumBands> r {};
+    if (std::abs (db) < 0.01f) return r;
+    Biquad b; b.setHighShelf (fs, kSilkHz, db, kSilkQ);
+    for (int i = 0; i < kNumBands; ++i) r[(size_t) i] = (float) b.magDb (fs, bandCenters()[(size_t) i]);
+    return r;
+}
 
 // correction = target - source, smoothed and limited
 inline std::array<float, kNumBands> computeCorrection (const Params& p)
@@ -1931,7 +1948,9 @@ public:
     Biquad voiceLp1, voiceLp2, voiceHp1, voiceHp2; float vAll = 0, vLow = 0, vHigh = 0, vCoef = 0;   // voicing gate (v1.7)
     DeEsser deess;
     SibCeiling sibCeil; DelayLine laRaw; SibGuard sibGuard;   // v2.0.4
-    Crisp crisp; Biquad airShelf; float airShelfDb = 0; ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
+    Crisp crisp; Biquad airShelf, silkShelf; float airShelfDb = 0, silkShelfDb = 0, silkW = 1, silkWC = 0;
+    Biquad silkTHp1, silkTHp2; float silkTF = 0, silkTS = 0, silkTFC = 0, silkTSC = 0; int silkTHold = 0, silkTHoldLen = 0;   // v2.9 SILK transient detector
+    ExciterBand excA, excB; float excGainA = 0, excGainB = 0, excGate = 0, excGateC = 0;
     StereoDelay delay;
     FDNReverb rev;
     BlackReverb blk;
@@ -1981,7 +2000,9 @@ public:
         sylHp.reset(); sylHp.setHPF (fs, 150.0); sylF = 0; sylRef = -200; sylG = 0;
         sylFC = msToCoef (15.0f, fs); sylRefC = msToCoef (400.0f, fs); sylUpC = msToCoef (30.0f, fs); sylGC = msToCoef (8.0f, fs); sylRelC = msToCoef (150.0f, fs);
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs); sibGuard.prepare (fs);
-        excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset();
+        excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset(); silkShelf.reset(); silkW = 1; silkWC = msToCoef (2.0f, fs);
+        silkTHp1.setHPF (fs, 3000.0); silkTHp2.setHPF (fs, 3000.0); silkTHp1.reset(); silkTHp2.reset(); silkTF = silkTS = 0; silkTHold = 0;
+        silkTFC = msToCoef (0.5f, fs); silkTSC = msToCoef (15.0f, fs); silkTHoldLen = (int) (0.012 * fs);
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
         voiceLp1.setLPF (fs, 1500.0); voiceLp2.setLPF (fs, 1500.0); voiceLp1.reset(); voiceLp2.reset(); voiceHp1.setHPF (fs, 4000.0); voiceHp2.setHPF (fs, 4000.0); voiceHp1.reset(); voiceHp2.reset(); vAll = vLow = vHigh = 0; vCoef = msToCoef (5.0f, fs); delay.prepare (fs); rev.prepare (fs); blk.prepare (fs); breath.prepare (fs);
         widthLayer.prepare (fs); learner.prepare (fs);
@@ -2142,6 +2163,7 @@ public:
         deess.amount = 1.0f; deess.relDetect = p.deessRelDetect; deess.detLo = p.deessDetLoDb; deess.detSpan = std::max (1.0f, p.deessDetSpanDb);
         satDrive = dbToGain (p.satDriveDb); satMix = 0.0f;   // v1.11: the tanh saturation is replaced by the harmonic exciter
         airShelf.setHighShelf (fs, 10000.0, p.airDb, 0.6); airShelfDb = p.airDb;
+        silkShelf.setHighShelf (fs, kSilkHz, p.silkDb, kSilkQ); silkShelfDb = p.silkDb;
         excGainA = std::max (0.0f, p.excAmount) * amt * dbToGain (p.excAdb);
         excGainB = std::max (0.0f, p.excAmount) * amt * dbToGain (p.excBdb + p.airDb);
 
@@ -2277,6 +2299,20 @@ public:
             if (p.excAmount > 0.001f && p.amount > 0)
                 crisp.process (l, r, p.excAmount * p.crispDepth * std::clamp (p.amount, 0.0f, 1.0f), pause || consonant || deess.k > 0.1f, deess.k);   // consonants pass untouched
             if (std::abs (airShelfDb) > 0.01f) { l = airShelf.process (l, 0); r = airShelf.process (r, 1); }
+            if (std::abs (silkShelfDb) > 0.01f)
+            {   // v2.9 SILK: full on vowels, half on s / sh / ch / j (S/Z detector), so the sibilant peaks rise only ~1 dB;
+                // a quarter on sharp high attacks (t, k, ch, j bursts), seen 5 ms ahead on the raw voice
+                {
+                    const float hx = silkTHp2.process (silkTHp1.process (0.5f * (detNowL + detNowR), 0), 0), e = hx * hx;
+                    silkTF = silkTFC * silkTF + (1 - silkTFC) * e; silkTS = silkTSC * silkTS + (1 - silkTSC) * e;
+                    if (silkTF > 4.0f * silkTS && silkTF > 1e-7f) silkTHold = silkTHoldLen; else if (silkTHold > 0) --silkTHold;
+                }
+                float w = 1.0f - 0.5f * std::clamp (deess.k, 0.0f, 1.0f);
+                if (silkTHold > 0) w = std::min (w, 0.25f);
+                silkW = silkWC * silkW + (1 - silkWC) * w;
+                const float sl = silkShelf.process (l, 0), sr = silkShelf.process (r, 1);
+                l += (sl - l) * silkW; r += (sr - r) * silkW;
+            }
             if (p.sibGuard)   // v2.0.4, after everything that lifts the top (EQ, S/Z Match, crisp, AIR)
             {
                 sibGuard.process (l, r, detNowL, detNowR, deess.k, std::clamp (p.deessAmount, 0.0f, 1.0f) * std::clamp (p.amount, 0.0f, 1.0f));

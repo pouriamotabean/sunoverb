@@ -86,3 +86,15 @@ timing_Suno_Lead_Reference.json -22.476 -29.799 -23.592 -36.318 -15.430 -6.938 5
 timing_Suno_Male.json -17.056 -25.173 -18.027 -30.425 -15.635 -1.349 f5ee56a384c8fb3e
 timing_Velvet_Female.json -16.678 -22.640 -18.125 -31.913 -18.302 -2.276 8010d7373e71a2de
 timing_Velvet_Male.json -16.833 -23.686 -18.017 -31.740 -18.226 -1.489 e3f1498d425ac67c
+silk_Black_Female.json -16.954 -23.045 -18.520 -29.404 -15.429 -1.972 9dc2102b4261ed45
+silk_Black_Male.json -17.192 -25.465 -18.243 -28.985 -15.540 -1.347 9dbd629648ec8584
+silk_Blue_Male.json -17.253 -25.248 -18.511 -27.576 -14.355 -1.515 a6c11b1468ac4611
+silk_Dreamy_Female.json -17.010 -23.102 -18.575 -29.477 -13.080 -2.077 15260a4961a41f52
+silk_Dreamy_Male.json -17.255 -25.531 -18.305 -29.065 -13.183 -1.643 78d2bad55efbae8d
+silk_Pouria_Signature.json -17.221 -26.008 -18.193 -28.872 -15.694 -1.364 ff8b9987dd8d76de
+silk_Radio_Male.json -17.050 -26.467 -17.961 -28.308 -15.655 -1.127 fff352271a356ccf
+silk_Suno_Female.json -16.950 -23.045 -18.514 -29.411 -15.547 -1.749 bcb1cc14ad537d2e
+silk_Suno_Lead_Reference.json -22.601 -30.037 -23.793 -34.859 -15.429 -7.042 b15b4cac9dde7ca4
+silk_Suno_Male.json -17.191 -25.465 -18.241 -28.988 -15.720 -1.389 31b85acef6da3826
+silk_Velvet_Female.json -16.788 -22.831 -18.295 -30.311 -18.355 -2.147 2fdf4db1085473e8
+silk_Velvet_Male.json -16.944 -23.894 -18.189 -30.183 -18.279 -1.628 54ea08e966198c76

@@ -304,7 +304,8 @@
   "dyn_punch": 100.0,
   "harmonics": 100.0,
   "air_db": 5.0,
-  "breath": 40.0
+  "breath": 40.0,
+  "silk_db": 3.0
  },
  "description": "Neutral reference: your voice like the Suno male vocals, SUNO reverb.",
  "width_env": {

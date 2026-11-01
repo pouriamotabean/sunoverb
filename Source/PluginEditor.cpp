@@ -607,7 +607,7 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     struct D { const char* id; const char* name; };
     const std::vector<std::vector<D>> pages {
         { { "eqAmount", "Match EQ" }, { "compAmount", "Compression" }, { "deess", "S/Z" }, { "harm", "Saturation" },
-          { "eqLow", "Low Boost" }, { "air", "Air" }, { "loudGain", "Loudness" }, { "output", "Output" } },
+          { "eqLow", "Low Boost" }, { "air", "Air" }, { "silk", "Silk" }, { "loudGain", "Loudness" }, { "output", "Output" } },
         { { "dynPeak", "Peak" }, { "dynLeveler", "Rider" }, { "breath", "Breath" }, { "dynSpeed", "Speed" }, { "dynPunch", "Attack" } },
         { { "revLevel", "Level" }, { "decay", "Decay" }, { "predelay", "Pre-delay" }, { "duck", "Ducking" }, { "duckRel", "Duck Rel" },
           { "width", "Width" }, { "wetHpf", "HPF" }, { "wetLpf", "LPF" }, { "rwLow", "Width Low" }, { "rwMid", "Width Mid" }, { "rwHigh", "Width High" } },
@@ -738,7 +738,7 @@ void Root::setPage (int p)
     page = p;
     display.setMode (p);
     static const char* titles[8] { "", "", "", "tone", "dynamics", "space", "width", "echo" };
-    static const char* notes[8] { "", "", "", "100 % = as learned.  s/z = sibilant match, saturation = harmonics, loudness = the match loudness gain.",
+    static const char* notes[8] { "", "", "", "100 % = as learned.  silk = a broad soft lift of the top (kept by Learn).  loudness = the match loudness gain.",
                                   "100 % = as learned.  rider evens the words, breath lowers the breaths between phrases.",
                                   "the reverb.  width low / mid / high = side only (mono stays untouched): < 300 Hz / 300 Hz - 4 kHz / > 4 kHz.",
                                   "the width layer: side only, mono stays untouched.  width low / mid / high = per band.",
@@ -783,7 +783,7 @@ void Root::paint (juce::Graphics& g)
             g.fillRoundedRectangle (bx - 1.0f, cy - h / 2, 2.0f, h, 1.0f);
         }
         g.setFont (inter (21.0f, 500)); g.drawText ("suno chain", juce::Rectangle<float> (x + 44, cy - 18, 230, 28), juce::Justification::centredLeft, false);
-        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("2.8.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
+        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("2.9.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
         g.setColour (col::dim); g.setFont (inter (10.5f)); g.drawText ("by pouria motabean", juce::Rectangle<float> (x + 45, cy + 9, 230, 14), juce::Justification::centredLeft, false);
     }
 }
@@ -845,7 +845,7 @@ void Root::resized()
             }
         };
         const float one = (float) disp.getY() + 150.0f, r1 = (float) disp.getY() + 112.0f, r2 = (float) disp.getY() + 214.0f;
-        row ({ "eqAmount", "compAmount", "deess", "harm" }, r1);       row ({ "eqLow", "air", "loudGain", "output" }, r2);
+        row ({ "eqAmount", "compAmount", "deess", "harm" }, r1);       row ({ "eqLow", "air", "silk", "loudGain", "output" }, r2);
         row ({ "dynPeak", "dynLeveler", "breath", "dynSpeed", "dynPunch" }, one);
         row ({ "revLevel", "decay", "predelay", "duck", "duckRel" }, r1); row ({ "width", "wetHpf", "wetLpf", "rwLow", "rwMid", "rwHigh" }, r2);
         row ({ "wLevel", "wTone", "wMotion" }, r1);                    row ({ "lwLow", "lwMid", "lwHigh" }, r2);

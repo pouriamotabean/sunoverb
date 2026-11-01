@@ -342,11 +342,22 @@ static void suitePresets()
     const double fs = 44100; auto vox = makeVocal (fs, 12.0);
     for (const auto& fp : factory::presets)
     {
-        // WIDTH TIMING (what the factory preset asks for since v2.8): its own golden entries
+        // SILK (what the factory preset asks for since v2.9): its own golden entries
+        {
+            Rig k (fs, 256); juce::String err;
+            k.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
+            check (std::abs (k.get ("silk") - 3.0f) < 0.01f, juce::String (fp.file) + ": factory preset uses SILK 3 dB");
+            k.learnAndMatch (vox);
+            auto outK = k.run (vox);
+            finiteAndSane (outK, fs, juce::String (fp.file) + " SILK");
+            compareGolden (juce::String ("silk_") + fp.file, measure (outK, fs, k.p->getLatencySamples()));
+        }
+        // WIDTH TIMING without SILK (= v2.8): must keep its golden entries
         {
             Rig t (fs, 256); juce::String err;
             t.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (t.get ("widthTiming") == 1.0f, juce::String (fp.file) + ": factory preset uses the WIDTH TIMING");
+            t.set ("silk", 0.0f);
             t.learnAndMatch (vox);
             auto outT = t.run (vox);
             finiteAndSane (outT, fs, juce::String (fp.file) + " WIDTH TIMING");
@@ -357,7 +368,7 @@ static void suitePresets()
             Rig y (fs, 256); juce::String err;
             y.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (y.get ("sylComp") == 100.0f, juce::String (fp.file) + ": factory preset uses the SYLLABLE LEVELER");
-            y.set ("widthTiming", 0.0f);
+            y.set ("widthTiming", 0.0f); y.set ("silk", 0.0f);
             y.learnAndMatch (vox);
             auto outY = y.run (vox);
             finiteAndSane (outY, fs, juce::String (fp.file) + " SYLLABLE LEVELER");
@@ -368,7 +379,7 @@ static void suitePresets()
             Rig w (fs, 256); juce::String err;
             w.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (w.get ("widthEnv") == 100.0f, juce::String (fp.file) + ": factory preset uses the WIDTH ENVELOPE");
-            w.set ("sylComp", 0.0f); w.set ("widthTiming", 0.0f);
+            w.set ("sylComp", 0.0f); w.set ("widthTiming", 0.0f); w.set ("silk", 0.0f);
             w.learnAndMatch (vox);
             auto outW = w.run (vox);
             finiteAndSane (outW, fs, juce::String (fp.file) + " WIDTH ENVELOPE");
@@ -379,7 +390,7 @@ static void suitePresets()
             Rig v (fs, 256); juce::String err;
             v.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (v.get ("eqVowel") == 1.0f, juce::String (fp.file) + ": factory preset uses the VOWEL EQ");
-            v.set ("widthEnv", 0.0f); v.set ("sylComp", 0.0f); v.set ("widthTiming", 0.0f);
+            v.set ("widthEnv", 0.0f); v.set ("sylComp", 0.0f); v.set ("widthTiming", 0.0f); v.set ("silk", 0.0f);
             v.learnAndMatch (vox);
             auto outV = v.run (vox);
             finiteAndSane (outV, fs, juce::String (fp.file) + " VOWEL");
@@ -391,7 +402,7 @@ static void suitePresets()
             e.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
             check (e.get ("eqExact") == 1.0f, juce::String (fp.file) + ": factory preset uses the EXACT EQ solver");
             check (e.get ("sibGuard") == 1.0f, juce::String (fp.file) + ": factory preset uses the SIBILANT GUARD");
-            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f); e.set ("sylComp", 0.0f); e.set ("widthTiming", 0.0f);
+            e.set ("eqVowel", 0.0f); e.set ("widthEnv", 0.0f); e.set ("sylComp", 0.0f); e.set ("widthTiming", 0.0f); e.set ("silk", 0.0f);
             e.learnAndMatch (vox);
             auto outE = e.run (vox);
             finiteAndSane (outE, fs, juce::String (fp.file) + " EXACT");
@@ -403,7 +414,7 @@ static void suitePresets()
         const bool ok = r.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
         check (ok, juce::String (fp.file) + ": loads (" + err + ")");
         if (! ok) continue;
-        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f); r.set ("sylComp", 0.0f); r.set ("widthTiming", 0.0f);   // = v2.0
+        r.set ("eqExact", 0.0f); r.set ("sibGuard", 0.0f); r.set ("eqVowel", 0.0f); r.set ("widthEnv", 0.0f); r.set ("sylComp", 0.0f); r.set ("widthTiming", 0.0f); r.set ("silk", 0.0f);   // = v2.0
         r.learnAndMatch (vox);
         auto out = r.run (vox);
         finiteAndSane (out, fs, fp.file);
@@ -585,12 +596,22 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             d7.p->setStateInformation (legacy7.getData(), (int) legacy7.getSize());
             check (d7.get ("widthTiming") == 0.0f, "session from before v2.8 restores with the WIDTH TIMING off");
         }
+        {
+            Rig d8 (fs, 256);
+            auto x13 = xmlOf (s1);
+            for (auto* e = x13->getFirstChildElement(); e != nullptr; e = e->getNextElement())
+                if (e->getStringAttribute ("id") == "silk") { x13->removeChildElement (e, true); break; }
+            auto legacy8 = blobOf (*x13);
+            d8.p->setStateInformation (legacy8.getData(), (int) legacy8.getSize());
+            check (d8.get ("silk") == 0.0f, "session from before v2.9 restores with SILK 0 dB");
+        }
         Rig fresh (fs, 256);
         check (fresh.get ("eqExact") == 1.0f, "a new instance uses the EXACT EQ solver");
         check (fresh.get ("eqVowel") == 1.0f, "a new instance uses the VOWEL EQ");
         check (fresh.get ("widthEnv") == 100.0f, "a new instance uses the WIDTH ENVELOPE");
         check (fresh.get ("sylComp") == 100.0f, "a new instance uses the SYLLABLE LEVELER");
         check (fresh.get ("widthTiming") == 1.0f, "a new instance uses the WIDTH TIMING");
+        check (std::abs (fresh.get ("silk") - 3.0f) < 0.01f, "a new instance uses SILK 3 dB");
     }
     {   // installed factory presets from v2.0 (no breath entry, never edited) are refreshed; edited copies are not
         auto dir = SunoChainProcessor::presetFolder();
@@ -686,6 +707,10 @@ static void suiteState (const juce::File& blobIn, const juce::File& blobOut)
             if (auto* q = x12["width_layer"].getDynamicObject()) q->removeProperty ("timing");
             Rig e11 (fs, 256); e11.loadPresetText (juce::JSON::toString (x12), "old_timing.json", err);
             check (e11.get ("widthTiming") == 0.0f, "preset without width_layer.timing (before v2.8) loads with the WIDTH TIMING off");
+            auto x14 = juce::JSON::parse (juce::String::fromUTF8 (factory::presets[6].json));
+            if (auto* q = x14["user"].getDynamicObject()) q->removeProperty ("silk_db");
+            Rig e12 (fs, 256); e12.loadPresetText (juce::JSON::toString (x14), "old_silk.json", err);
+            check (e12.get ("silk") == 0.0f, "preset without user.silk_db (before v2.9) loads with SILK 0 dB");
             tmp.deleteFile();
         }
         Rig f2 (fs, 256);

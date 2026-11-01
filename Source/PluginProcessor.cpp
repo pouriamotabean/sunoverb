@@ -214,6 +214,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SunoChainProcessor::createLa
     // v2.8: WIDTH TIMING (phrase starts stay narrow ~200 ms like Suno; no width burst on onsets). On for new sessions
     // and the factory presets; off for sessions / presets saved before v2.8 (their sound).
     p.push_back (std::make_unique<APB> (juce::ParameterID { "widthTiming", 16 }, "Width Timing", true));
+    // v2.9: SILK (broad Baxandall-like top lift, not taken back by Learn). 3 dB for new sessions and the factory
+    // presets; 0 dB for sessions / presets saved before v2.9 (their sound).
+    p.push_back (std::make_unique<APF> (juce::ParameterID { "silk", 17 }, "Silk", NRange (0, 6), 3.0f, dB));
     return { p.begin(), p.end() };
 }
 
@@ -257,7 +260,7 @@ void SunoChainProcessor::installFactoryPresets()
         // entries added after v2.0 (a whole section when the second name is empty)
         static const char* added[][2] = { { "user", "breath" }, { "eq", "solver" }, { "deesser", "guard" }, { "eq", "vowel" }, { "eq", "target_curve_voiced_db" },
                                           { "width_env", "" }, { "dynamics", "syllable_amount" }, { "dynamics", "syllable_ratio" },
-                                          { "width_layer", "timing" } };
+                                          { "width_layer", "timing" }, { "user", "silk_db" } };
         bool missing = false;
         for (auto& a : added)
         {
@@ -352,6 +355,7 @@ sc::Params SunoChainProcessor::buildParams() const
     p.widthEnvAmount = v ("widthEnv") / 100.0f;
     p.sylAmount = v ("sylComp") / 100.0f;
     p.widthTiming = v ("widthTiming") > 0.5f;
+    p.silkDb = v ("silk");
     p.reverbLevelDb = v ("revLevel");
     p.predelayMs = v ("predelay");
     p.rt60 = v ("decay");
@@ -514,6 +518,7 @@ bool SunoChainProcessor::loadPresetFile (const juce::File& f, juce::String& erro
         set ("widthEnv", num (json, "width_env.amount", 0.0) * 100.0);   // v2.2: likewise
         set ("sylComp", num (json, "dynamics.syllable_amount", 0.0) * 100.0);   // v2.3: likewise
         set ("widthTiming", num (json, "width_layer.timing", 0.0));   // v2.8: likewise
+        set ("silk", num (json, "user.silk_db", 0.0));   // v2.9: likewise
     dirty = true;
     return true;
 }
@@ -581,6 +586,7 @@ bool SunoChainProcessor::savePresetFile (const juce::File& f, juce::String& erro
     put (j, "width_env.amount", v ("widthEnv") / 100.0);
     put (j, "dynamics.syllable_amount", v ("sylComp") / 100.0);
     put (j, "width_layer.timing", v ("widthTiming") > 0.5);
+    put (j, "user.silk_db", v ("silk"));
     put (j, "reverb.band_width_db", toVarArray (std::array<float, 3> { (float) v ("rwLow"), (float) v ("rwMid"), (float) v ("rwHigh") }));
     put (j, "width_layer.band_db", toVarArray (std::array<float, 3> { (float) v ("lwLow"), (float) v ("lwMid"), (float) v ("lwHigh") }));
     put (j, "delay.band_width_db", toVarArray (std::array<float, 3> { (float) v ("dwLow"), (float) v ("dwMid"), (float) v ("dwHigh") }));
@@ -723,7 +729,11 @@ void SunoChainProcessor::startLearn()
 {
     {   // the correction that is active while Learn listens (needed for the closed-loop EQ)
         const juce::SpinLock::ScopedLockType sl (presetLock);
-        learnAppliedCorr = sc::computeCorrection (buildParams());
+        const auto bp = buildParams();
+        learnAppliedCorr = sc::computeCorrection (bp);
+        // v2.9: SILK is a deliberate lift after the EQ: Learn counts it as applied, so the closed loop leaves it alone
+        const auto silk = sc::silkResponse (getSampleRate() > 0 ? getSampleRate() : 48000.0, bp.silkDb);
+        for (size_t b = 0; b < learnAppliedCorr.size(); ++b) learnAppliedCorr[b] += silk[b];
     }
     chain.startLearn();
 }
@@ -943,7 +953,7 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
             // BREATH arrived in v1.15.1 with a 40 % default: an older session had no breath control at all
             // the EXACT EQ solver arrived in v2.0.2: an older session keeps the LEGACY one (its sound)
             const auto pid = r->getParameterID();
-            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard" || pid == "eqVowel" || pid == "widthEnv" || pid == "sylComp" || pid == "widthTiming") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
+            const float legacy = (pid == "breath" || pid == "eqExact" || pid == "sibGuard" || pid == "eqVowel" || pid == "widthEnv" || pid == "sylComp" || pid == "widthTiming" || pid == "silk") ? 0.0f : r->convertFrom0to1 (r->getDefaultValue());
             juce::ValueTree c ("PARAM"); c.setProperty ("id", r->getParameterID(), nullptr); c.setProperty ("value", legacy, nullptr);
             state.appendChild (c, nullptr);
             continue;
