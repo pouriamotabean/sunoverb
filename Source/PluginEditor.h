@@ -7,7 +7,7 @@
 // drawer); the whole UI is scaled as one piece, so it stays sharp and proportional at any size.
 namespace ui
 {
-constexpr int kW = 1200, kH = 800, kSideW = 480;   // Advanced = side module on the right (v1.5)
+constexpr int kW = 1200, kH = 800, kSideW = 480;   // v2.7: one size (kSideW kept for the old Advanced module, unused)
 
 
 class LookAndFeel : public juce::LookAndFeel_V4
@@ -134,6 +134,10 @@ public:
     void setMatch (const SunoChainProcessor::MatchSnapshot& m) { match = m; if (mode == 2) repaint(); }
     void setMode (int m) { mode = m; repaint(); }
     int getMode() const { return mode; }
+    // v2.7: pages 3..7 show a section's controls (knobs are separate components on top); the bottom strip
+    // holds the page names (drawn by Root)
+    juce::String pageTitle, pageNote;
+    float bottomInset = 34.0f;
     void paint (juce::Graphics&) override;
 private:
     void paintEq (juce::Graphics&, juce::Rectangle<float>);
@@ -176,8 +180,12 @@ public:
     std::function<void (bool)> onAdvanced;
 
 private:
-    Knob& addKnob (const juce::String& id, const juce::String& name, int size, bool violet = false, bool big = false);
-    void placeKnob (const juce::String& id, float cx, float cy, int size);
+    Knob& addKnob (const juce::String& id, const juce::String& name, int size, bool violet = false, bool big = false, const juce::String& key = {});
+    void placeKnob (const juce::String& key, float cx, float cy, int size);
+    void setPage (int p);
+    int page = 0; bool lastSync = false;
+    std::vector<std::vector<juce::String>> pageKnobs;   // per page: the knob keys shown on it
+    juce::OwnedArray<TextLink> pageTabs, sectionTitles;
     void loadPreset();
     void savePreset();
     void stepPreset (int dir);
@@ -191,7 +199,6 @@ private:
     Meters meters;
     PresetPill pill;
     FlatButton loadB { "LOAD" }, saveB { "SAVE" }, learnB { "LEARN" }, clearB { "CLEAR" };
-    TextLink eqTab { "EQ", 11.0f }, widthTab { "WIDTH", 11.0f }, matchTab { "MATCH", 11.0f };
     SlideSwitch advancedB { "ADVANCED" };
     GlassButton matchB { "MATCH LOUDNESS" }, freezeB { "FREEZE" };
     Selector listenSel;
@@ -204,7 +211,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> revAtt, widthAtt, echoAtt, syncAtt, blackAtt, freezeAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> noteAtt;
     std::map<juce::String, std::unique_ptr<Knob>> knobs;
-    std::vector<juce::String> drawerIds;
+    juce::Label noteL, syncL;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String statusText, lastStatus; int statusAge = 0;
     int ticks = 0;

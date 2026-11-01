@@ -375,6 +375,16 @@ void Display::paint (juce::Graphics& g)
     g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.8f), 0, r.getY(), juce::Colours::transparentBlack, 0, r.getY() + 14.0f, false));
     g.fillPath (p);
     g.setColour (juce::Colour (0xff2a2a2c)); g.strokePath (p, juce::PathStrokeType (1.0f));
+    g.setColour (col::line); g.drawHorizontalLine ((int) (r.getBottom() - bottomInset), r.getX() + 18, r.getRight() - 18);
+    r = r.withTrimmedBottom (bottomInset);
+    if (mode >= 3)
+    {   // a section page: its name and a note; the knobs sit on top
+        g.setColour (col::text); g.setFont (inter (20.0f, 500));
+        g.drawText (pageTitle, juce::Rectangle<float> (r.getX() + 24, r.getY() + 16, 400, 26), juce::Justification::centredLeft, false);
+        g.setColour (col::dim); g.setFont (inter (11.0f));
+        g.drawText (pageNote, juce::Rectangle<float> (r.getX() + 24, r.getY() + 42, r.getWidth() - 48, 16), juce::Justification::centredLeft, false);
+        return;
+    }
     if (mode == 1) paintWidth (g, r); else if (mode == 2) paintMatch (g, r); else paintEq (g, r);
 }
 
@@ -563,27 +573,16 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     setLookAndFeel (&lnf);
     setOpaque (true);
     addAndMakeVisible (display); addAndMakeVisible (meters); addAndMakeVisible (pill);
-    for (auto* b : std::initializer_list<juce::Component*> { &loadB, &saveB, &learnB, &clearB, &eqTab, &widthTab, &matchTab, &advancedB, &matchB, &freezeB, &listenSel, &blackSw, &lcd }) addAndMakeVisible (*b);
-    eqTab.underlineWhenOn = widthTab.underlineWhenOn = matchTab.underlineWhenOn = true;
-    eqTab.setToggleState (true, juce::dontSendNotification);
-    auto tab = [this] (int m)
-    {
-        display.setMode (m);
-        eqTab.setToggleState (m == 0, juce::dontSendNotification); widthTab.setToggleState (m == 1, juce::dontSendNotification);
-        matchTab.setToggleState (m == 2, juce::dontSendNotification);
-    };
-    eqTab.onClick = [tab] { tab (0); }; widthTab.onClick = [tab] { tab (1); }; matchTab.onClick = [tab] { tab (2); };
+    for (auto* b : std::initializer_list<juce::Component*> { &loadB, &saveB, &learnB, &clearB, &matchB, &freezeB, &listenSel, &blackSw, &lcd }) addAndMakeVisible (*b);
     loadB.onClick = [this] { loadPreset(); };
     saveB.onClick = [this] { savePreset(); };
     learnB.onClick = [this] { toggleLearn(); };
     clearB.onClick = [this] { proc.clearLearn(); statusText = "Learned voice cleared."; };
-    advancedB.onClick = [this] { setAdvanced (! proc.advancedOpen); };
     matchB.onClick = [this] { toggleLoudMatch(); };
     listenSel.onChange = [this] (int p) { proc.listenMode = p; proc.markDirty(); };
     listenSel.setTooltip ("LISTEN: ALL = normal, WET = reverb + echo only (with the ducking), WIDTH = width layer only. Not saved.");
     blackSw.setTooltip ("Reverb: SUNO (fitted to the Suno vocals) or BLACK (long, dense, wide, blooming)");
     blackSw.setClickingTogglesState (true);
-    advancedB.setTooltip ("Advanced controls");
     matchB.setTooltip ("Measures your output while you play, then holds the gain that matches the Suno vocal's loudness");
     pill.onPrev = [this] { stepPreset (-1); };
     pill.onNext = [this] { stepPreset (1); };
@@ -599,27 +598,49 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     delayInfo.setJustificationType (juce::Justification::centredRight);
     delayInfo.setFont (capsFont (10.5f));
 
-    // main controls
-    addKnob ("amount", "Amount", 150, false, true);
-    addKnob ("eqAmount", "Match EQ", 64); addKnob ("compAmount", "Compression", 64);
-    addKnob ("deess", "S/Z", 64);         addKnob ("harm", "Saturation", 64);
-    addKnob ("revLevel", "Level", 64);    addKnob ("decay", "Decay", 64);
-    addKnob ("predelay", "Pre-delay", 64); addKnob ("duck", "Ducking", 64);
-    addKnob ("wLevel", "Width", 64, true); addKnob ("wTone", "Tone", 64, true); addKnob ("wMotion", "Held Notes", 64, true);
-    addKnob ("dlyLevel", "Level", 64);    addKnob ("dlyFb", "Feedback", 64); addKnob ("dlyTime", "Time", 64);
-    // Advanced drawer
-    struct D { const char* id; const char* name; bool violet; };
-    for (const auto& d : std::vector<D> {
-            { "eqLow", "Low Boost", false }, { "air", "Air", false }, { "loudGain", "Loudness", false }, { "output", "Output", false },
-            { "dynPeak", "Peak", false }, { "dynLeveler", "Rider", false }, { "breath", "Breath", false }, { "dynSpeed", "Speed", false }, { "dynPunch", "Attack", false },
-            { "width", "Width", false }, { "wetHpf", "HPF", false }, { "wetLpf", "LPF", false }, { "duckRel", "Duck Rel", false },
-            { "rwLow", "Low", false }, { "rwMid", "Mid", false }, { "rwHigh", "High", false },
-            { "lwLow", "Low", true }, { "lwMid", "Mid", true }, { "lwHigh", "High", true },
-            { "dlyToRev", "> Reverb", false }, { "dwLow", "Low", false }, { "dwMid", "Mid", false }, { "dwHigh", "High", false } })
-    {
-        addKnob (d.id, d.name, 42, d.violet);
-        drawerIds.push_back (d.id);
+    // v2.7: the face keeps AMOUNT and two knobs per section; every control is on a page of the display
+    addKnob ("amount", "Amount", 120, false, true);
+    for (auto [id, name] : std::vector<std::pair<const char*, const char*>> {
+            { "eqAmount", "Match EQ" }, { "compAmount", "Compression" }, { "revLevel", "Level" }, { "decay", "Decay" },
+            { "wLevel", "Width" }, { "wMotion", "Held Notes" }, { "dlyLevel", "Level" }, { "dlyFb", "Feedback" } })
+        addKnob (id, name, 64, false, false, juce::String ("m:") + id);
+    struct D { const char* id; const char* name; };
+    const std::vector<std::vector<D>> pages {
+        { { "eqAmount", "Match EQ" }, { "compAmount", "Compression" }, { "deess", "S/Z" }, { "harm", "Saturation" },
+          { "eqLow", "Low Boost" }, { "air", "Air" }, { "loudGain", "Loudness" }, { "output", "Output" } },
+        { { "dynPeak", "Peak" }, { "dynLeveler", "Rider" }, { "breath", "Breath" }, { "dynSpeed", "Speed" }, { "dynPunch", "Attack" } },
+        { { "revLevel", "Level" }, { "decay", "Decay" }, { "predelay", "Pre-delay" }, { "duck", "Ducking" }, { "duckRel", "Duck Rel" },
+          { "width", "Width" }, { "wetHpf", "HPF" }, { "wetLpf", "LPF" }, { "rwLow", "Width Low" }, { "rwMid", "Width Mid" }, { "rwHigh", "Width High" } },
+        { { "wLevel", "Width" }, { "wTone", "Tone" }, { "wMotion", "Held Notes" }, { "lwLow", "Width Low" }, { "lwMid", "Width Mid" }, { "lwHigh", "Width High" } },
+        { { "dlyLevel", "Level" }, { "dlyFb", "Feedback" }, { "dlyTime", "Time" }, { "dlyToRev", "Into Reverb" },
+          { "dwLow", "Width Low" }, { "dwMid", "Width Mid" }, { "dwHigh", "Width High" } } };
+    pageKnobs.assign (8, {});
+    for (size_t pg = 0; pg < pages.size(); ++pg)
+        for (const auto& d : pages[pg]) { addKnob (d.id, d.name, 46); pageKnobs[pg + 3].push_back (d.id); }
+
+    {   // page names in the display's bottom strip, section names on the face (click = open its page)
+        const char* names[8] { "eq", "stereo", "match", "tone", "dynamics", "space", "width", "echo" };
+        for (int i = 0; i < 8; ++i)
+        {
+            auto* t = pageTabs.add (new TextLink (names[i], 11.0f));
+            t->underlineWhenOn = true; t->onClick = [this, i] { setPage (i); };
+            addAndMakeVisible (t);
+        }
+        const char* secs[4] { "tone", "space", "width", "echo" }; const int secPage[4] { 3, 5, 6, 7 };
+        for (int i = 0; i < 4; ++i)
+        {
+            auto* t = sectionTitles.add (new TextLink (secs[i], 12.5f));
+            t->setTooltip ("All of " + juce::String (secs[i]) + " on the display");
+            const int pg = secPage[i]; t->onClick = [this, pg] { setPage (pg); };
+            addAndMakeVisible (t);
+        }
     }
+    for (auto* l : { &noteL, &syncL })
+    {
+        l->setFont (inter (10.5f)); l->setColour (juce::Label::textColourId, col::label);
+        l->setJustificationType (juce::Justification::centred); l->setInterceptsMouseClicks (false, false); addChildComponent (*l);
+    }
+    noteL.setText ("note", juce::dontSendNotification); syncL.setText ("sync", juce::dontSendNotification);
 
     for (auto id : { "rwLow", "rwMid", "rwHigh", "lwLow", "lwMid", "lwHigh", "dwLow", "dwMid", "dwHigh", "output", "wTone", "loudGain", "air" })
         knobs[id]->slider.getProperties().set ("bipolar", true);
@@ -642,13 +663,14 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     noteAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "dlyNote", noteBox);
 
     setSize (kW, kH);
-    setAdvanced (proc.advancedOpen);
+    setPage (0);
 }
 
 Root::~Root() { setLookAndFeel (nullptr); }
 
-Knob& Root::addKnob (const juce::String& id, const juce::String& name, int size, bool violet, bool big)
+Knob& Root::addKnob (const juce::String& id, const juce::String& name, int size, bool violet, bool big, const juce::String& keyIn)
 {
+    const auto key = keyIn.isEmpty() ? id : keyIn;
     auto k = std::make_unique<Knob>();
     k->name = name;
     k->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
@@ -696,12 +718,12 @@ Knob& Root::addKnob (const juce::String& id, const juce::String& name, int size,
     auto* prm = proc.apvts.getParameter (id);
     k->slider.setDoubleClickReturnValue (true, prm->convertFrom0to1 (prm->getDefaultValue()));
     k->slider.setTooltip (prm->getName (64) + "  (double-click: default)");
-    auto& ref = *k; knobs[id] = std::move (k); return ref;
+    auto& ref = *k; knobs[key] = std::move (k); return ref;
 }
 
-void Root::placeKnob (const juce::String& id, float cx, float cy, int size)
+void Root::placeKnob (const juce::String& key, float cx, float cy, int size)
 {
-    auto& k = *knobs[id];
+    auto& k = *knobs[key];
     const bool big = k.slider.getProperties().contains ("big");
     const int box = size + (big ? 28 : 22);
     k.slider.setBounds (juce::Rectangle<int> (box, box).withCentre ({ (int) cx, (int) cy }));
@@ -709,32 +731,46 @@ void Root::placeKnob (const juce::String& id, float cx, float cy, int size)
     k.label.setBounds ((int) cx - 64, ly, 128, 18);
 }
 
-void Root::setAdvanced (bool open)
+void Root::setAdvanced (bool) {}   // v2.7: no Advanced module (every control is on a page of the display)
+
+void Root::setPage (int p)
 {
-    proc.advancedOpen = open;
-    advancedB.setToggleState (open, juce::dontSendNotification);
-    for (auto& id : drawerIds) { knobs[id]->slider.setVisible (open); knobs[id]->label.setVisible (open); }
-    if (onAdvanced) onAdvanced (open);
-    repaint();
+    page = p;
+    display.setMode (p);
+    static const char* titles[8] { "", "", "", "tone", "dynamics", "space", "width", "echo" };
+    static const char* notes[8] { "", "", "", "100 % = as learned.  s/z = sibilant match, saturation = harmonics, loudness = the match loudness gain.",
+                                  "100 % = as learned.  rider evens the words, breath lowers the breaths between phrases.",
+                                  "the reverb.  width low / mid / high = side only (mono stays untouched): < 300 Hz / 300 Hz - 4 kHz / > 4 kHz.",
+                                  "the width layer: side only, mono stays untouched.  width low / mid / high = per band.",
+                                  "the echo, ducked with the reverb.  width low / mid / high = its width per band." };
+    display.pageTitle = titles[p]; display.pageNote = notes[p];
+    for (int i = 0; i < pageTabs.size(); ++i) pageTabs[i]->setToggleState (i == p, juce::dontSendNotification);
+    const int secPage[4] { 3, 5, 6, 7 };
+    for (int i = 0; i < sectionTitles.size(); ++i) sectionTitles[i]->setToggleState (secPage[i] == p || (i == 0 && p == 4), juce::dontSendNotification);
+    for (auto& [key, k] : knobs)
+    {
+        if (key == "amount" || key.startsWith ("m:")) continue;
+        bool on = false;
+        for (auto& id : pageKnobs[(size_t) p]) on = on || id == key;
+        if (key == "dlyTime" && proc.apvts.getRawParameterValue ("dlySync")->load() > 0.5f) on = false;
+        k->slider.setVisible (on); k->label.setVisible (on);
+    }
+    const bool echo = p == 7, sync = proc.apvts.getRawParameterValue ("dlySync")->load() > 0.5f;
+    noteBox.setVisible (echo && sync); noteL.setVisible (echo && sync); syncB.setVisible (echo); syncL.setVisible (echo);
+    resized(); repaint();
 }
 
 void Root::paint (juce::Graphics& g)
 {
-    // v2.6: the black device (ReKit 2): one body, thin lines between the sections, no wood / screws / metal
+    // v2.6 / v2.7: the black device (ReKit 2): one body, thin lines between the parts, no wood / screws / metal
     g.setGradientFill (juce::ColourGradient (col::body0, 0, 0, col::body1, 0, (float) kH, false));
     g.fillAll();
     g.setColour (juce::Colours::white.withAlpha (0.06f)); g.drawHorizontalLine (0, 0, (float) getWidth());
     g.setColour (col::line);
     g.drawHorizontalLine (140, 48, (float) kW - 48);                       // header
-    g.drawHorizontalLine (424, 48, (float) kW - 48);                       // display row
+    g.drawHorizontalLine (486, 48, (float) kW - 48);                       // display row
     g.drawHorizontalLine (722, 48, (float) kW - 48);                       // bottom bar
-    for (float x : { 344.0f, 599.0f, 854.0f }) g.drawVerticalLine ((int) x, 440.0f, 706.0f);
-    if (proc.advancedOpen)
-    {
-        g.setColour (juce::Colour (0xff141416)); g.fillRect ((float) kW, 0.0f, (float) kSideW, (float) kH);
-        g.setColour (col::line); g.drawVerticalLine (kW, 0.0f, (float) kH);
-        for (int i = 1; i < 4; ++i) g.drawHorizontalLine ((int) kSec[i], (float) kW + 30.0f, (float) (kW + kSideW) - 30.0f);
-    }
+    for (float x : { 324.0f, 600.0f, 876.0f }) g.drawVerticalLine ((int) x, 500.0f, 706.0f);
 
     // logo: small waveform mark + name
     {
@@ -747,31 +783,8 @@ void Root::paint (juce::Graphics& g)
             g.fillRoundedRectangle (bx - 1.0f, cy - h / 2, 2.0f, h, 1.0f);
         }
         g.setFont (inter (21.0f, 500)); g.drawText ("suno chain", juce::Rectangle<float> (x + 44, cy - 18, 230, 28), juce::Justification::centredLeft, false);
-        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("2.6.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
+        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("2.7.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
         g.setColour (col::dim); g.setFont (inter (10.5f)); g.drawText ("by pouria motabean", juce::Rectangle<float> (x + 45, cy + 9, 230, 14), juce::Justification::centredLeft, false);
-    }
-    // section titles
-    drawCaps (g, "Tone", { 70, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
-    drawCaps (g, "Space", { 366, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
-    drawCaps (g, "Width", { 621, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
-    drawCaps (g, "Echo", { 876, 442, 120, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
-    const bool sync = proc.apvts.getRawParameterValue ("dlySync")->load() > 0.5f;
-    if (sync) drawCaps (g, "Note", { 883, 701, 120, 18 }, col::text.withAlpha (0.82f), 12.5f);
-    drawCaps (g, "Sync", { 1001, 701, 120, 18 }, col::text.withAlpha (0.82f), 12.5f);
-    if (proc.advancedOpen)
-    {   // side module: four sections stacked (the image's dividers)
-        const float x = (float) kW + 40.0f;
-        auto title = [&] (int sec, const juce::String& t, const juce::String& sub)
-        {
-            drawCaps (g, t, { x + 26, kSec[sec] + 10, 220, 18 }, col::dim.brighter (0.15f), 11.5f, juce::Justification::centredLeft);
-            if (sub.isNotEmpty()) drawCaps (g, sub, { x + 150, kSec[sec] + 10, 220, 18 }, col::dim.withAlpha (0.75f), 9.5f, juce::Justification::centredRight);
-        };
-        title (0, "Tone  /  Dynamics", "100 % = learned");
-        title (1, "Reverb", "width per band");
-        title (2, "Vocal width", "per band");
-        title (3, "Echo", "width per band");
-        drawCaps (g, "Side only: mono and the centre stay untouched", { x, kSec[2] + 128, 400, 16 }, col::dim.withAlpha (0.7f), 9.5f);
-        drawCaps (g, "Low < 300 Hz   Mid 300 Hz - 4 kHz   High > 4 kHz", { x, kSec[2] + 146, 400, 16 }, col::dim.withAlpha (0.7f), 9.5f);
     }
 }
 
@@ -783,51 +796,68 @@ void Root::resized()
     learnB.setBounds (888, 60, 112, 32);
     clearB.setBounds (1006, 60, 80, 32);
 
-    // glass display (inside the faceplate well) + tabs, meters, AMOUNT
-    display.setBounds (144, 182, 580, 207);
-    eqTab.setBounds (532, 188, 48, 24); widthTab.setBounds (580, 188, 70, 24); matchTab.setBounds (650, 188, 70, 24);
-    meters.setBounds (785, 182, 145, 207);
-    placeKnob ("amount", 1046, 262, 150);
-
-    // columns: Tone 48-344, Space 344-599, Width 599-854, Echo 854-1150 (the faceplate's dividers)
-    const float r1 = 530, r2 = 660;
-    placeKnob ("eqAmount", 137, r1, 64); placeKnob ("compAmount", 255, r1, 64);
-    placeKnob ("deess", 137, r2, 64);    placeKnob ("harm", 255, r2, 64);
-    placeKnob ("revLevel", 420, r1, 64); placeKnob ("decay", 523, r1, 64);
-    placeKnob ("predelay", 420, r2, 64); placeKnob ("duck", 523, r2, 64);
-    placeKnob ("wLevel", 676, r1, 64);   placeKnob ("wTone", 777, r1, 64);
-    placeKnob ("wMotion", 726, r2, 64);
-    placeKnob ("dlyLevel", 943, r1, 64); placeKnob ("dlyFb", 1061, r1, 64);
-    placeKnob ("dlyTime", 943, r2, 64);
-    noteBox.setBounds (906, 642, 74, 40);
-    syncB.setBounds (1061 - 28, (int) r2 - 28, 56, 56);
-    revLamp.setBounds (412, 441, 20, 20);
-    widthLamp.setBounds (664, 441, 20, 20);
-    echoLamp.setBounds (910, 441, 20, 20);
-    delayInfo.setBounds (940, 442, 192, 18);
-
-    status.setBounds (112, 742, 250, 20);
-    freezeB.setBounds (380, 738, 110, 30);
-    lcd.setVisible (false);
-    listenSel.setBounds (500, 738, 186, 30);
-    matchB.setBounds (692, 738, 200, 30);
-    advancedB.setBounds (904, 740, 176, 26);
-    blackSw.setBounds (446, 429, 130, 44);
-
-    // Advanced side module (x 1200-1680): columns and rows inside its four sections
-    const float c[4] { kW + 80.0f, kW + 180.0f, kW + 280.0f, kW + 380.0f };
-    const int ks = 40;
-    placeKnob ("eqLow", c[0], 64, ks); placeKnob ("air", c[1], 64, ks); placeKnob ("loudGain", c[2], 64, ks); placeKnob ("output", c[3], 64, ks);
-    {   // v1.15.1: five in the dynamics row (BREATH added)
-        const float c5[5] { kW + 70.0f, kW + 155.0f, kW + 240.0f, kW + 325.0f, kW + 410.0f };
-        placeKnob ("dynPeak", c5[0], 144, ks); placeKnob ("dynLeveler", c5[1], 144, ks); placeKnob ("breath", c5[2], 144, ks);
-        placeKnob ("dynSpeed", c5[3], 144, ks); placeKnob ("dynPunch", c5[4], 144, ks);
+    // the display (graphs and the pages of every section), meters, AMOUNT
+    const juce::Rectangle<int> disp (48, 160, 804, 306);
+    display.setBounds (disp);
+    {   // page names in the display's bottom strip
+        int x = disp.getX() + 18; const int y = disp.getBottom() - 32;
+        for (int i = 0; i < pageTabs.size(); ++i)
+        {
+            const int w = (int) juce::GlyphArrangement::getStringWidth (inter (12.1f, 600), pageTabs[i]->getButtonText()) + 26;
+            if (i == 3) x += 30;   // graphs | sections
+            pageTabs[i]->setBounds (x, y, w, 28); x += w;
+        }
     }
-    placeKnob ("width", c[0], kSec[1] + 62, ks); placeKnob ("wetHpf", c[1], kSec[1] + 62, ks); placeKnob ("wetLpf", c[2], kSec[1] + 62, ks); placeKnob ("duckRel", c[3], kSec[1] + 62, ks);
-    placeKnob ("rwLow", c[0], kSec[1] + 140, ks); placeKnob ("rwMid", c[1], kSec[1] + 140, ks); placeKnob ("rwHigh", c[2], kSec[1] + 140, ks);
-    placeKnob ("lwLow", c[0], kSec[2] + 72, ks); placeKnob ("lwMid", c[1], kSec[2] + 72, ks); placeKnob ("lwHigh", c[2], kSec[2] + 72, ks);
-    placeKnob ("dlyToRev", c[0], kSec[3] + 72, ks);
-    placeKnob ("dwLow", c[1], kSec[3] + 72, ks); placeKnob ("dwMid", c[2], kSec[3] + 72, ks); placeKnob ("dwHigh", c[3], kSec[3] + 72, ks);
+    meters.setBounds (872, 160, 112, 306);
+    placeKnob ("amount", 1078, 300, 116);
+
+    // the face: four sections, two knobs each; the name opens the section's page
+    const int x0[4] { 48, 324, 600, 876 };
+    for (int i = 0; i < 4; ++i)
+    {
+        const int w = (int) juce::GlyphArrangement::getStringWidth (inter (13.75f, 600), sectionTitles[i]->getButtonText()) + 16;
+        sectionTitles[i]->setBounds (x0[i] + 14, 498, w, 26);
+    }
+    revLamp.setBounds (x0[1] + 76, 501, 20, 20);
+    widthLamp.setBounds (x0[2] + 76, 501, 20, 20);
+    echoLamp.setBounds (x0[3] + 70, 501, 20, 20);
+    blackSw.setBounds (x0[1] + 150, 494, 110, 34);
+    delayInfo.setBounds (x0[3] + 90, 502, 172, 18);
+    const float ky = 618;
+    const char* face[4][2] { { "m:eqAmount", "m:compAmount" }, { "m:revLevel", "m:decay" }, { "m:wLevel", "m:wMotion" }, { "m:dlyLevel", "m:dlyFb" } };
+    for (int i = 0; i < 4; ++i) { placeKnob (face[i][0], (float) x0[i] + 78.0f, ky, 64); placeKnob (face[i][1], (float) x0[i] + 198.0f, ky, 64); }
+
+    // pages: one or two rows of knobs inside the display
+    {
+        auto row = [&] (const std::vector<juce::String>& keys, float y)
+        {
+            const float left = (float) disp.getX() + 24.0f, w = (float) disp.getWidth() - 48.0f, step = w / (float) juce::jmax (1, (int) keys.size());
+            for (size_t i = 0; i < keys.size(); ++i)
+            {
+                const float cx = left + step * ((float) i + 0.5f);
+                if (keys[i] == "#time")
+                {
+                    if (knobs.count ("dlyTime")) placeKnob ("dlyTime", cx, y, 46);
+                    noteBox.setBounds ((int) cx - 44, (int) y - 16, 88, 32); noteL.setBounds ((int) cx - 50, (int) y + 32, 100, 16);
+                }
+                else if (keys[i] == "#sync") { syncB.setBounds ((int) cx - 26, (int) y - 26, 52, 52); syncL.setBounds ((int) cx - 50, (int) y + 32, 100, 16); }
+                else placeKnob (keys[i], cx, y, 46);
+            }
+        };
+        const float one = (float) disp.getY() + 150.0f, r1 = (float) disp.getY() + 112.0f, r2 = (float) disp.getY() + 214.0f;
+        row ({ "eqAmount", "compAmount", "deess", "harm" }, r1);       row ({ "eqLow", "air", "loudGain", "output" }, r2);
+        row ({ "dynPeak", "dynLeveler", "breath", "dynSpeed", "dynPunch" }, one);
+        row ({ "revLevel", "decay", "predelay", "duck", "duckRel" }, r1); row ({ "width", "wetHpf", "wetLpf", "rwLow", "rwMid", "rwHigh" }, r2);
+        row ({ "wLevel", "wTone", "wMotion" }, r1);                    row ({ "lwLow", "lwMid", "lwHigh" }, r2);
+        row ({ "dlyLevel", "dlyFb", "#time", "#sync" }, r1);           row ({ "dlyToRev", "dwLow", "dwMid", "dwHigh" }, r2);
+    }
+
+    status.setBounds (70, 742, 400, 20);
+    freezeB.setBounds (520, 738, 110, 30);
+    lcd.setVisible (false);
+    listenSel.setBounds (642, 738, 186, 30);
+    matchB.setBounds (842, 738, 210, 30);
+    advancedB.setVisible (false);
 }
 
 void Root::tick()
@@ -873,10 +903,7 @@ void Root::tick()
     meters.update (m);
     display.setWidth (m.widthBands);
     const bool sync = proc.apvts.getRawParameterValue ("dlySync")->load() > 0.5f;
-    const bool wasSync = noteBox.isVisible();
-    noteBox.setVisible (sync);
-    knobs["dlyTime"]->slider.setVisible (! sync); knobs["dlyTime"]->label.setVisible (! sync);
-    if (wasSync != sync) repaint();
+    if (sync != lastSync) { lastSync = sync; setPage (page); }   // echo page: note box or time knob
     delayInfo.setText (juce::String ((int) std::round (m.delayMs)) + " ms" + (sync ? "  @ " + juce::String (m.bpm, 1) + " bpm" : juce::String()),
                        juce::dontSendNotification);
 
@@ -885,8 +912,13 @@ void Root::tick()
     {
         for (auto* id : ids)
         {
-            auto& s = knobs[id]->slider;
-            if ((bool) s.getProperties().getWithDefault ("off", false) != off) { s.getProperties().set ("off", off); s.repaint(); }
+            for (const auto& key : { juce::String (id), "m:" + juce::String (id) })   // the page knob and its copy on the face
+            {
+                auto it = knobs.find (key);
+                if (it == knobs.end()) continue;
+                auto& s = it->second->slider;
+                if ((bool) s.getProperties().getWithDefault ("off", false) != off) { s.getProperties().set ("off", off); s.repaint(); }
+            }
         }
     };
     setOff ({ "revLevel", "decay", "predelay", "duck", "width", "wetHpf", "wetLpf", "duckRel" }, ! revLamp.getToggleState());
@@ -995,7 +1027,7 @@ SunoChainEditor::~SunoChainEditor() { stopTimer(); }
 void SunoChainEditor::applyLayout (bool advanced)
 {
     const int lh = ui::kH;
-    logicalW = ui::kW + (advanced ? ui::kSideW : 0);
+    juce::ignoreUnused (advanced); logicalW = ui::kW;   // v2.7: one size
     root.setSize (logicalW, lh);
     const float s = juce::jlimit (0.6f, 1.6f, proc.uiScale);
     constrainer.setFixedAspectRatio ((double) logicalW / (double) lh);

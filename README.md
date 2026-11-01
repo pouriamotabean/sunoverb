@@ -1,4 +1,4 @@
-# Suno Chain v2.6.0
+# Suno Chain v2.7.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,14 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.7.0 (a cleaner face; the sound is unchanged)
+- The face shows AMOUNT and two knobs per section (tone: match eq, compression / space: level, decay / width:
+  width, held notes / echo: level, feedback): 9 knobs instead of 38.
+- Every other control is on a page of the display, as in ReKit 2: the strip at the bottom of the display reads
+  eq / stereo / match (graphs) and tone / dynamics / space / width / echo (all of that section's knobs); clicking a
+  section name on the face opens its page. The Advanced side module is gone (the window has one size).
+- Same parameters, automation and sessions.
+
 ## v2.6.0 (new look, like ReKit 2; the sound is unchanged)
 - The whole interface is drawn in code in the style of ReKit 2: a black device, monochrome with one orange (AMOUNT),
   Inter / Space Mono (embedded, SIL Open Font License), dark knobs with a white mark and a thin value arc, chips for
