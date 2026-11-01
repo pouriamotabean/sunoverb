@@ -66,6 +66,12 @@ struct Params
     float crispDepth = 1.3f;        // v1.13: SATURATION 100 % = the 130 % of v1.12 (Pouria's sweet spot)
     bool useExciter = false;        // v1.11 exciter, off since v1.12   // v1.11 harmonic exciter (amount 1 = fitted to Suno)
     bool rideOn = true; float rideRangeDb = 2.0f, rideAmount = 0.25f, rideSpeedMs = 300.0f;   // v1.13 vocal rider (replaces the leveler)
+    // v2.3 SYLLABLE LEVELER: inside a syllable Suno's level moves about half as much as ours (20 ms level vs its
+    // 400 ms median, p90-p10: Suno male 4.5 dB, ours 9.4 dB; female 7.2 / 10.8); the onsets rise less and the tails
+    // hold longer. Pulls the 15 ms level toward its own ~300 ms average by sylRatio (dB per dB), measured 20 ms
+    // ahead; frozen on consonants, released in pauses, never lifts what is > 15 dB under the average.
+    float sylAmount = 0.0f;     // 0 = off (before v2.3), 1 = 100 %
+    float sylRatio = 0.5f;      // from the preset (dynamics.syllable_ratio)
     float lookaheadMs = 20.0f;      // v1.13: 20 ms so the rider is never late (reported to the host as latency)
     float onsetNarrowDb = 12.0f, onsetNarrowMs = 20.0f;   // v1.13.1: Suno.s highs start each note narrower (phase-correct now)
     int listenMode = 0;             // v1.10 LISTEN: 0 all, 1 wet only (reverb + echo, ducked), 2 width layer only; never saved
@@ -1805,6 +1811,7 @@ public:
     DelayLine detL, detR; int detLag = 0;     // keeps the S/Z detector 5 ms ahead of the output whatever the lookahead
     Biquad onHp1, onHp2; float onFast = 0, onSlow = 0, onFastC = 0, onSlowC = 0, onG = 1, onRecC = 0, onDip = 1;
     float rideEnv = 0, rideEnvC = 0, rideRef = -200, rideRefC = 0, rideG = 0, rideGC = 0;
+    Biquad sylHp; float sylF = 0, sylFC = 0, sylRef = -200, sylRefC = 0, sylUpC = 0, sylG = 0, sylGC = 0, sylRelC = 0;   // v2.3
     int lookahead = 0;
     float duckEnv = 0, duckGr = 0, duckEnvCoef = 0, duckAtk = 0, duckRel = 0, phraseRef = -100, phraseDecay = 0;
     float freezeHf = 0.063f, rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
@@ -1832,6 +1839,8 @@ public:
         onHp1.reset(); onHp2.reset(); onHp1.setHPF (fs, 4500.0); onHp2.setHPF (fs, 4500.0); onFast = onSlow = 0; onG = 1;
         onFastC = msToCoef (3.0f, fs); onSlowC = msToCoef (60.0f, fs);
         rideEnv = 0; rideRef = -200; rideG = 0; rideEnvC = msToCoef (50.0f, fs); rideRefC = msToCoef (4000.0f, fs);
+        sylHp.reset(); sylHp.setHPF (fs, 150.0); sylF = 0; sylRef = -200; sylG = 0;
+        sylFC = msToCoef (15.0f, fs); sylRefC = msToCoef (400.0f, fs); sylUpC = msToCoef (30.0f, fs); sylGC = msToCoef (8.0f, fs); sylRelC = msToCoef (150.0f, fs);
         laL.allocate (lookahead + 4); laR.allocate (lookahead + 4); laRaw.allocate (lookahead + 4); sibCeil.prepare (fs); sibGuard.prepare (fs);
         excA.prepare (fs, 2000.0, 4500.0, 4500.0, 10000.0); excB.prepare (fs, 5000.0, 8000.0, 9000.0, 18000.0); excGate = 0; excGateC = msToCoef (5.0f, fs); crisp.prepare (fs); airShelf.reset();
         eq.prepare (fs); eqValid = false; sibValid = false; deess.prepare (fs); c1.reset(); c2.reset(); vc.prepare (fs); freezeHold = 0;
@@ -2093,6 +2102,27 @@ public:
                 rideGain = dbToGain (rideG);
             }
             else rideG = 0;
+            if (p.sylAmount > 0.001f)
+            {   // v2.3 SYLLABLE LEVELER (detector on the signal 20 ms ahead, like the rider)
+                const float m1 = sylHp.process (0.5f * (l + r), 0);
+                sylF = sylFC * sylF + (1 - sylFC) * m1 * m1;
+                const float fDb = 10 * std::log10 (sylF + 1e-12f);
+                if (pause) sylG = sylRelC * sylG;   // back to 0 dB in pauses
+                else if (consonant) { if (sylG > 0) sylG = sylGC * sylG; }   // consonants: never lifted
+                else if (fDb > -70.0f)
+                {
+                    // reference = the syllable level: rises with the voice within ~30 ms, falls slowly (~400 ms)
+                    sylRef = sylRef < -150 ? fDb : (fDb > sylRef ? sylUpC * sylRef + (1 - sylUpC) * fDb : sylRefC * sylRef + (1 - sylRefC) * fDb);
+                    const float dev = fDb - sylRef;
+                    const float k = p.sylRatio * p.sylAmount;
+                    float t = 0.0f;
+                    if (dev < 0.0f && dev > -18.0f) t = std::min (8.0f, -k * dev);   // voiced dips / tails: lifted (legato)
+                    else if (dev > 0.0f) t = std::max (-6.0f, -0.5f * k * dev);      // onsets above the syllable level: eased
+                    sylG = sylGC * sylG + (1 - sylGC) * t;
+                }
+                rideGain *= dbToGain (sylG);
+            }
+            else sylG = 0;
             const float compMono = 0.5f * (laOutL + laOutR) * rideGain;
             const float g1 = vc.process (compMono, consonant || pause);
             rmsEnv = rmsCoef * rmsEnv + (1 - rmsCoef) * compMono * compMono * g1 * g1;
