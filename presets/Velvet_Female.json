@@ -1,0 +1,792 @@
+{
+ "format": "SunoChainPreset",
+ "version": 7,
+ "name": "Velvet Female",
+ "source_file": "average of 5 Suno female lead stems (Pouria, Oct 2026); character from Velvet Male",
+ "eq": {
+  "target_curve_hz": [
+   50,
+   63,
+   80,
+   100,
+   125,
+   160,
+   200,
+   250,
+   315,
+   400,
+   500,
+   630,
+   800,
+   1000,
+   1250,
+   1600,
+   2000,
+   2500,
+   3150,
+   4000,
+   5000,
+   6300,
+   8000,
+   10000,
+   12500,
+   16000
+  ],
+  "target_curve_db": [
+   -24.52,
+   -24.2,
+   -22.23,
+   -20.37,
+   -17.99,
+   -4.52,
+   9.22,
+   10.67,
+   14.85,
+   7.28,
+   6.35,
+   6.58,
+   4.28,
+   -1.91,
+   -4.13,
+   -4.3,
+   -7.89,
+   -7.83,
+   -9.35,
+   -12.08,
+   -16.26,
+   -18.19,
+   -14.58,
+   -11.33,
+   -19.3,
+   -27.64
+  ],
+  "target_curve_voiced_db": [
+   -24.34,
+   -23.74,
+   -21.62,
+   -19.65,
+   -17.45,
+   -3.66,
+   10.41,
+   11.87,
+   15.8,
+   7.95,
+   7.53,
+   7.32,
+   5.35,
+   -1.29,
+   -3.79,
+   -4.87,
+   -9.71,
+   -8.26,
+   -12.12,
+   -15.77,
+   -21.45,
+   -26.19,
+   -19.65,
+   -14.41,
+   -23.6,
+   -31.41
+  ],
+  "vowel": true,
+  "amount": 1.0,
+  "max_boost_db": 12.0,
+  "max_cut_db": 24.0,
+  "max_boost_high_db": 15.0,
+  "solver": "exact"
+ },
+ "dynamics": {
+  "target_crest_db": 8.56,
+  "target_spread400_db": 5.66,
+  "default_total_gr_db": 6.0,
+  "comp1": {
+   "ratio": 4.0,
+   "attack_ms": 2.0,
+   "release_ms": 50.0,
+   "share": 0.55
+  },
+  "comp2": {
+   "ratio": 4.0,
+   "attack_ms": 30.0,
+   "release_ms": 300.0
+  },
+  "leveler_factor": 2.1,
+  "punch": 1.5,
+  "syllable_amount": 1.0,
+  "syllable_ratio": 0.75
+ },
+ "deesser": {
+  "method": "sz_match",
+  "sib_curve_hz": [
+   2000,
+   2500,
+   3150,
+   4000,
+   5000,
+   6300,
+   8000,
+   10000,
+   12500,
+   16000
+  ],
+  "sib_curve_db": [
+   -22.03,
+   -26.76,
+   -20.32,
+   -18.35,
+   -15.94,
+   -14.95,
+   -15.12,
+   -10.68,
+   -13.83,
+   -21.48
+  ],
+  "n_sib_segments": 304,
+  "split_hz": 4000.0,
+  "sib_median_db": -1.98,
+  "sib_p90_db": 10.49,
+  "n_sibilants": 55,
+  "ratio": 6.0,
+  "max_cut_db": 20.0,
+  "guard": true
+ },
+ "saturation": {
+  "drive_db": 6.0,
+  "mix": 0.0,
+  "measured": false
+ },
+ "delay": {
+  "detected": false,
+  "user_set": true,
+  "on": true,
+  "time_ms": 375.0,
+  "feedback": 0.25,
+  "level_db": -20.0,
+  "hpf_hz": 300.0,
+  "lpf_hz": 5000.0,
+  "ping_pong": true,
+  "sync": true,
+  "note": 1,
+  "to_reverb": 0.5,
+  "band_width_db": [
+   -9.0,
+   -3.0,
+   -1.5
+  ],
+  "note_text": "v1.13 safe default: ping-pong ~70 % L/R, 1/8 dotted, 25 % feedback, 300 Hz-5 kHz, -20 dB, ducked with the reverb, 50 % into the reverb"
+ },
+ "width_layer": {
+  "on": true,
+  "level_db": -25.27,
+  "delay_ms": 1.0,
+  "shift_hz": 1.597,
+  "tilt_db": 0.48,
+  "hpf_hz": 141.7,
+  "lpf_hz": 16000.0,
+  "bloom_db": 37.16,
+  "bloom_ms": 76.79,
+  "side_only": true,
+  "band_db": [
+   8.29,
+   7.0,
+   1.5
+  ]
+ },
+ "multiband_width": {
+  "xover_low_hz": 300.0,
+  "xover_high_hz": 4000.0,
+  "note": "side-only gains per band (low/mid/high) for reverb, width layer and delay; mid/mono untouched"
+ },
+ "reverb": {
+  "on": true,
+  "predelay_ms": 205.0,
+  "rt60_s": 3.06,
+  "rt60_low_mul": 1.0,
+  "rt60_high_mul": 0.7,
+  "crossover_hz": 1500.0,
+  "size": 1.0,
+  "mod_depth": 0.5,
+  "diffusion": 0.75,
+  "diffusion_size": 2.0,
+  "early_ms": 22.0,
+  "early_level_db": -100.0,
+  "hpf_hz": 300.0,
+  "lpf_hz": 10000.0,
+  "bump_hz": 2000.0,
+  "bump_db": 6.0,
+  "width": 0.922,
+  "level_db": -20.21,
+  "band_width_db": [
+   -12.3,
+   -1.96,
+   -21.49
+  ],
+  "black": false
+ },
+ "ducking": {
+  "depth_db": 3.77,
+  "attack_ms": 5.0,
+  "release_ms": 542.9
+ },
+ "measurements": {
+  "suno": {
+   "loudness_level_dbfs": -22.86,
+   "crest_db": 8.84,
+   "spread400_db": 4.67,
+   "wet_arrival_ms": 215.0,
+   "wet_rise_after_vocal_db": 6.5,
+   "wet_peak_re_dry_db": -8.69,
+   "side_minus_mid_in_gaps_db": -3.37,
+   "gap_decay": {
+    "slope_db_s": -11.13333756912023,
+    "n": 14,
+    "all": [
+     -21.2,
+     -7.4,
+     -11.1,
+     -44.8,
+     -28.9,
+     4.3,
+     -12.7,
+     -8.3,
+     -3.8,
+     7.7,
+     -13.8,
+     -15.2,
+     0.9,
+     -11.1
+    ]
+   },
+   "wet_rise_short_pauses_db": 5.8,
+   "wet_rise_long_pauses_db": 6.78,
+   "wet_peak_time_long_ms": 202.5,
+   "side_minus_mid_singing_db": -16.67,
+   "side_minus_mid_section_start_db": -45.37,
+   "width_layer_coherence": {
+    "broad": 0.2129891867593329,
+    "bands": {
+     "250": 0.23105840718728402,
+     "500": 0.19290396371401203,
+     "1000": 0.16228886515604346,
+     "2000": 0.11535278693693929,
+     "4000": 0.1459491003133527
+    },
+    "k_ratio": 0.3758255675608916,
+    "bloom_ratio": 0.7839426444854486
+   },
+   "delay_detected": null,
+   "width_bands_singing_db": [
+    -18.91,
+    -15.24,
+    -20.1
+   ],
+   "width_bands_pauses_db": [
+    -9.49,
+    -3.47,
+    -15.51
+   ],
+   "width_fit_bands_singing_db": [
+    -18.54,
+    -14.86,
+    -24.33
+   ],
+   "width_fit_bands_pauses_db": [
+    -10.29,
+    -3.14,
+    -17.75
+   ],
+   "width_meter_singing_db": [
+    -19.99,
+    -17.52,
+    -26.49
+   ],
+   "width_meter_pauses_db": [
+    -5.64,
+    -6.66,
+    -23.58
+   ]
+  },
+  "render_with_preset": {
+   "wet_arrival_ms": 215.0,
+   "wet_rise_after_vocal_db": 5.83,
+   "wet_peak_re_dry_db": -9.68,
+   "side_minus_mid_in_gaps_db": -3.48,
+   "gap_decay": {
+    "slope_db_s": -10.085441373777574,
+    "n": 18,
+    "all": [
+     10.9,
+     -11.0,
+     -8.0,
+     -13.9,
+     4.4,
+     -12.7,
+     -14.0,
+     -40.9,
+     -11.8,
+     1.0,
+     7.1,
+     -7.9,
+     -9.2,
+     -2.7,
+     -13.9,
+     -8.9,
+     -13.9,
+     -11.6
+    ]
+   },
+   "wet_rise_short_pauses_db": 5.65,
+   "wet_rise_long_pauses_db": 6.78,
+   "wet_peak_time_long_ms": 255.0,
+   "side_minus_mid_singing_db": -16.74,
+   "side_minus_mid_section_start_db": -36.89,
+   "width_layer_coherence": {
+    "broad": 0.23591659998195635,
+    "bands": {
+     "250": 0.2411060907949374,
+     "500": 0.1747838702852182,
+     "1000": 0.14148318638255597,
+     "2000": 0.07814538211002786,
+     "4000": 0.12956393720039366
+    },
+    "k_ratio": 0.3912471674098704,
+    "bloom_ratio": 0.5353156593574415
+   },
+   "width_bands_singing_db": [
+    -21.13,
+    -15.25,
+    -21.9
+   ],
+   "width_bands_pauses_db": [
+    -9.63,
+    -4.06,
+    -15.92
+   ],
+   "width_fit_bands_singing_db": [
+    -21.17,
+    -14.87,
+    -24.4
+   ],
+   "width_fit_bands_pauses_db": [
+    -9.43,
+    -3.59,
+    -21.64
+   ]
+  },
+  "wet_curve_suno_db": [
+   -13.85,
+   -15.31,
+   -18.02,
+   -17.5,
+   -13.71,
+   -10.8,
+   -9.85,
+   -8.04,
+   -4.18,
+   -0.95,
+   -0.17,
+   0.33,
+   0.53,
+   0.62,
+   1.57,
+   2.38,
+   3.11,
+   2.89,
+   1.4,
+   0.51,
+   -1.32,
+   -4.89,
+   -7.06,
+   -8.02,
+   -8.94,
+   -9.84
+  ],
+  "wet_curve_render_db": [
+   -14.4,
+   -15.56,
+   -18.09,
+   -18.14,
+   -18.42,
+   -18.85,
+   -15.03,
+   -9.55,
+   -4.95,
+   -2.15,
+   -0.61,
+   0.78,
+   1.73,
+   2.59,
+   3.18,
+   3.88,
+   4.56,
+   3.31,
+   0.3,
+   -3.07,
+   -6.59,
+   -9.97,
+   -12.81,
+   -14.86,
+   -15.34,
+   -14.57
+  ],
+  "fit_history": [
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": -1.47,
+    "rise_short": 0.03,
+    "sing_width": -3.805,
+    "gap_width": 2.258,
+    "rt": 2.772,
+    "layer": 1.568,
+    "k_ratio": 0.172,
+    "early_side": 130.34,
+    "bloom": 0.287
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": -0.968,
+    "rise_short": 0.033,
+    "sing_width": -3.82,
+    "gap_width": 1.751,
+    "rt": 3.092,
+    "layer": 1.604,
+    "k_ratio": 0.187,
+    "early_side": 130.34,
+    "bloom": 0.249
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": -0.464,
+    "rise_short": 0.576,
+    "sing_width": -3.604,
+    "gap_width": -1.508,
+    "rt": 1.544,
+    "layer": 1.603,
+    "k_ratio": 0.189,
+    "early_side": 130.34,
+    "bloom": 0.245
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": -1.219,
+    "rise_short": 0.854,
+    "sing_width": -1.712,
+    "gap_width": -4.128,
+    "rt": 1.011,
+    "layer": 1.713,
+    "k_ratio": 0.181,
+    "early_side": 130.34,
+    "bloom": 0.333
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": -0.928,
+    "rise_short": -0.346,
+    "sing_width": 1.296,
+    "gap_width": -1.957,
+    "rt": 0.9,
+    "layer": 1.75,
+    "k_ratio": 0.166,
+    "early_side": 130.34,
+    "bloom": 0.591
+   },
+   {
+    "stage": "A",
+    "arrival": 0.0,
+    "rise_long": -0.371,
+    "rise_short": -0.23,
+    "sing_width": 1.028,
+    "gap_width": -0.704,
+    "rt": 0.889,
+    "layer": 1.722,
+    "k_ratio": 0.159,
+    "early_side": 130.34,
+    "bloom": 0.535
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -5.68,
+     0.75,
+     -9.83
+    ]
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -3.5,
+     0.3,
+     -2.44
+    ]
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -2.58,
+     0.08,
+     -0.9
+    ]
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -1.91,
+     0.03,
+     -0.37
+    ]
+   },
+   {
+    "stage": "A2",
+    "band_err": [
+     -1.47,
+     0.01,
+     -0.11
+    ]
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": 0.361,
+    "rise_short": 0.444,
+    "sing_width": 2.075,
+    "gap_width": -0.442,
+    "rt": 0.907,
+    "layer": -0.302,
+    "k_ratio": -0.197,
+    "early_side": -5.736,
+    "bloom": 0.083
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": 0.195,
+    "rise_short": 0.315,
+    "sing_width": 2.097,
+    "gap_width": -0.442,
+    "rt": 0.907,
+    "layer": -0.129,
+    "k_ratio": 0.023,
+    "early_side": -1.699,
+    "bloom": 0.237
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": 0.193,
+    "rise_short": 0.118,
+    "sing_width": 2.132,
+    "gap_width": -0.439,
+    "rt": 0.907,
+    "layer": -0.161,
+    "k_ratio": 0.018,
+    "early_side": -6.458,
+    "bloom": 0.159
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": -0.431,
+    "rise_short": -0.021,
+    "sing_width": 2.151,
+    "gap_width": -0.439,
+    "rt": 0.907,
+    "layer": -0.095,
+    "k_ratio": -0.011,
+    "early_side": -4.741,
+    "bloom": 0.176
+   },
+   {
+    "stage": "B",
+    "arrival": 215.0,
+    "rise_long": -0.027,
+    "rise_short": 0.296,
+    "sing_width": 2.191,
+    "gap_width": -0.439,
+    "rt": 0.907,
+    "layer": -0.076,
+    "k_ratio": -0.01,
+    "early_side": -5.713,
+    "bloom": 0.202
+   },
+   {
+    "stage": "D-low",
+    "err": 6.64
+   },
+   {
+    "stage": "D-low",
+    "err": 1.65
+   },
+   {
+    "stage": "E",
+    "band_err": [
+     2.52,
+     -0.08,
+     3.37
+    ]
+   },
+   {
+    "stage": "E",
+    "band_err": [
+     2.57,
+     -0.01,
+     3.41
+    ]
+   },
+   {
+    "stage": "F",
+    "band_err": [
+     2.58,
+     0.0,
+     3.42
+    ]
+   },
+   {
+    "stage": "F",
+    "band_err": [
+     2.58,
+     -0.0,
+     0.58
+    ]
+   },
+   {
+    "stage": "F",
+    "band_err": [
+     2.58,
+     -0.0,
+     0.08
+    ]
+   },
+   {
+    "stage": "G",
+    "early_side": -10.15
+   },
+   {
+    "stage": "G",
+    "early_side": -9.19
+   },
+   {
+    "stage": "G",
+    "early_side": -8.71
+   },
+   {
+    "stage": "H",
+    "rise_long": 0.01
+   },
+   {
+    "stage": "H",
+    "rise_long": 0.01
+   }
+  ],
+  "singing_gate_db": 30.0,
+  "singing_smooth_ms": 120,
+  "excluded_ranges_s": [
+   [
+    54.5,
+    58.0
+   ],
+   [
+    60.75,
+    62.25
+   ],
+   [
+    63.5,
+    65.0
+   ],
+   [
+    79.25,
+    90.0
+   ],
+   [
+    112.5,
+    115.0
+   ],
+   [
+    153.5,
+    166.25
+   ]
+  ],
+  "averaged_from": [
+   "Suno Female 1",
+   "Suno Female 2",
+   "Suno Female 3",
+   "Suno Female 4",
+   "Suno Female 5"
+  ]
+ },
+ "loudness": {
+  "integrated_lufs": -13.6,
+  "note": "ITU-R BS.1770 integrated loudness of the Suno vocal stem (reverb included); target of MATCH LOUDNESS"
+ },
+ "calibration": {
+  "method": "ear calibration from POURIA_SUNO_VERB",
+  "values": {
+   "reverb_level_db": -6.4,
+   "duck_add_db": 3.9,
+   "duck_release_mul": 4.7,
+   "duck_release_max_ms": 600.0,
+   "rt60_mul": 0.8,
+   "reverb_width_mul": 1.23,
+   "reverb_hpf_min_hz": 300.0,
+   "saturation_mix": 0.0
+  },
+  "low_floor_raised_db": {},
+  "before": {
+   "level": -9.71,
+   "rt60": 3.82,
+   "hpf": 250.0,
+   "width": 0.75,
+   "duck": 4.27,
+   "rel": 115.52
+  },
+  "v1_13": {
+   "reverb_level_db": -3.1,
+   "duck_db": -4.4,
+   "layer_level_db": 5.1,
+   "layer_band_mid_db": 7.0,
+   "layer_band_high_db": 0.0,
+   "rev_band_mid_add_db": -3.0,
+   "rev_band_high_add_db": -9.3
+  }
+ },
+ "user": {
+  "amount": 100.0,
+  "output_db": 0.0,
+  "eq_low": 35.0,
+  "compression": 100.0,
+  "deess": 100.0,
+  "dyn_peak": 100.0,
+  "dyn_leveler": 100.0,
+  "dyn_speed": 100.0,
+  "dyn_punch": 100.0,
+  "harmonics": 140.0,
+  "air_db": 2.0,
+  "breath": 40.0
+ },
+ "description": "Warm and soft: less air, more saturation, medium reverb. Female voices (EQ, S/Z, vowel EQ, width envelope from 5 Suno female stems).",
+ "width_env": {
+  "amount": 1.0,
+  "gain_db": [
+   0.0,
+   6.9,
+   12.0,
+   12.0,
+   12.0,
+   0.0,
+   0.0,
+   4.4,
+   6.6,
+   6.6,
+   0.0,
+   0.0,
+   0.0,
+   2.7,
+   9.6
+  ],
+  "note": "v2.2 WIDTH ENVELOPE: width layer gain (dB) per band (<1k, 1-4k, >4k) x level bin (0-5, 5-9.5, 9.5-15.5, 15.5-24.5, 24.5-40 dB under the phrase peak). Fitted (closed loop, tools/width_env.py side_energies) so the side-minus-mid rise over the bins follows 5 Suno female lead stems; only opening (monotone), max +12 dB."
+ }
+}

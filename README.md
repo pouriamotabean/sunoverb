@@ -1,4 +1,4 @@
-# Suno Chain v2.3.0
+# Suno Chain v2.4.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,14 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v2.4.0 (Dreamy Female, Velvet Female)
+- Two new factory presets (12 now): **Dreamy Female** and **Velvet Female** = the by-ear character of Dreamy Male /
+  Velvet Male (reverb, width, ducking, delay, knobs, loudness) + every voice-dependent value of Suno Female (EQ and
+  vowel EQ targets, S/Z curve, crest / spread, width meter targets, width envelope; measured on 5 Suno female lead
+  stems). All presets carry every v2.1-v2.3 feature (vowel EQ, width envelope, syllable leveler).
+- Pouria's female take through Dreamy Male vs Dreamy Female (vowels minus Suno female vowels, 6.3 / 10 / 12.5 kHz):
+  +4.1 / -6.5 / -7.2 dB -> +0.6 / -2.2 / -1.7 dB.
+
 ## v2.3.0 (SYLLABLE LEVELER, small)
 - Measured: the syllable peaks were already close to Suno; the real difference is legato. Suno's lines barely dip
   between / inside syllables (male: 2 % of the singing frames dip > 6 dB under the 400 ms median on voiced sounds,

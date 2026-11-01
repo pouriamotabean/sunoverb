@@ -1,6 +1,6 @@
 # Suno Chain – Roadmap
 
-Current version: **v2.3.0** (SYLLABLE LEVELER). v2.2.0: WIDTH ENVELOPE. v2.1.0: VOWEL EQ. v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
+Current version: **v2.4.0** (Dreamy Female, Velvet Female). v2.3.0: SYLLABLE LEVELER. v2.2.0: WIDTH ENVELOPE. v2.1.0: VOWEL EQ. v2.0.4: female presets, SIBILANT GUARD. v2.0.3: Windows installer + releases. Before: **v2.0.2** (Oct 22, 2026: EXACT Match EQ solver; v2.0.1: technical review P0 + P1, see README and TESTING.md). Author: Pouria Motabean.
 
 ## 1. Next steps (in order)
 1. **Pouria tests v2.0** on his own and other vocals; all sound / GUI issues reported at once and fixed in one release.
@@ -13,7 +13,7 @@ Current version: **v2.3.0** (SYLLABLE LEVELER). v2.2.0: WIDTH ENVELOPE. v2.1.0: 
    presets are rebuilt at once and the female Dreamy / Velvet presets added.
 6. **Next, one at a time** (each: build, measure with the real plugin code, A/B files, Pouria's ear, then release),
    and every preset in the bank must keep working with them:
-   1. Female **Dreamy** and **Velvet** presets (same method as Suno Female, from the Suno female stems).
+   1. ~~Female **Dreamy** and **Velvet** presets~~ done in v2.4.0.
    2. ~~**Width envelope**~~ done in v2.2.0 (waiting for Pouria's ear).
    3. ~~**Syllable compression**~~ done in v2.3.0 (small effect: the remaining gap is the Suno singer's legato).
 

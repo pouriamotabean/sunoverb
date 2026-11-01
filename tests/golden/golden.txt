@@ -62,3 +62,15 @@ syl_Suno_Female.json -16.825 -22.820 -18.312 -30.982 -15.373 -1.893 c864958d6f2c
 syl_Suno_Lead_Reference.json -22.476 -29.799 -23.592 -36.318 -15.430 -6.909 a43fb406ef467dda
 syl_Suno_Male.json -17.059 -25.176 -18.030 -30.428 -15.500 -1.349 e89b2d339c12819f
 syl_Velvet_Male.json -16.836 -23.690 -18.021 -31.744 -17.917 -1.502 8333844f008f5058
+syl_Dreamy_Female.json -16.888 -22.881 -18.375 -31.051 -12.926 -2.409 b6ff493081c66dee
+wenv_Dreamy_Female.json -16.892 -22.869 -18.401 -30.762 -12.901 -1.728 d29345ad5d4d25a4
+vowel_Dreamy_Female.json -16.886 -22.863 -18.395 -30.756 -13.012 -1.736 2146f03b5be9ec86
+exact_Dreamy_Female.json -17.253 -23.588 -18.977 -27.471 -13.175 -1.179 d0fe86b0e2ba80c7
+preset_Dreamy_Female.json -19.418 -26.512 -21.888 -25.643 -13.798 -1.321 bd71b43cdc64a22
+black_Dreamy_Female.json -19.447 -26.541 -21.921 -25.662 -13.898 -1.516 3cc75f3e2b06ebbd
+syl_Velvet_Female.json -16.681 -22.643 -18.128 -31.916 -18.008 -2.279 beadedfa0335b20
+wenv_Velvet_Female.json -16.675 -22.615 -18.138 -31.711 -17.966 -1.665 4452e065da5695a8
+vowel_Velvet_Female.json -16.672 -22.613 -18.135 -31.708 -18.145 -1.660 16b54a660d9ab3ad
+exact_Velvet_Female.json -17.103 -23.412 -18.787 -27.682 -18.320 -0.810 b35e9ac4f510ed53
+preset_Velvet_Female.json -17.956 -24.617 -20.033 -25.795 -18.720 -0.824 a143dc6b0c16ec1d
+black_Velvet_Female.json -17.990 -24.646 -20.069 -25.829 -18.231 -1.079 9e907ca98240b101
