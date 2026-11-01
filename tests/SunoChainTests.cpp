@@ -346,7 +346,11 @@ static void suitePresets()
         {
             Rig k (fs, 256); juce::String err;
             k.loadPresetText (juce::String::fromUTF8 (fp.json), fp.file, err);
-            check (std::abs (k.get ("silk") - 3.0f) < 0.01f, juce::String (fp.file) + ": factory preset uses SILK 3 dB");
+            {   // v3.0: SILK per preset (male average family 2 dB, the rest 3 dB, set from the SUNO MATCH tone row)
+                const float want = (float) (double) juce::JSON::parse (juce::String::fromUTF8 (fp.json)).getProperty ("user", {}).getProperty ("silk_db", 3.0);
+                check (want >= 1.5f && want <= 3.0f && std::abs (k.get ("silk") - want) < 0.01f,
+                       juce::String (fp.file) + ": factory preset uses its SILK (" + juce::String (want, 1) + " dB)");
+            }
             k.learnAndMatch (vox);
             auto outK = k.run (vox);
             finiteAndSane (outK, fs, juce::String (fp.file) + " SILK");

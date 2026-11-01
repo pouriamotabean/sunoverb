@@ -1,4 +1,4 @@
-# Suno Chain v2.9.0
+# Suno Chain v3.0.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,30 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v3.0.0 (the preset bank rebuilt from 21 Suno stems; the DSP is unchanged)
+- 14 new Suno solo vocals (New folder 1-4). Left out: "1" and "2" in New folder 4 (copies of s1 / s3). Lead Vocals3
+  (~40 kbps) gives no spectral target; Lead Vocals10 (almost mono) is not a width reference. Female intros removed:
+  Lead Vocals6 0-22.5 s, nim (Cover) 0-31 s. Suno's effect passages were found automatically (0.5 s segments far
+  off the stem's own normal in low band / width / periodicity, at least 1.5 s long) and left out: Lead Vocals
+  18-20.5, 74.5-78.5, 80.5-84, 86-89.5 s; Lead Vocals3 66-69 s; Lead Vocals4 34.5-37 s; Lead Vocals9 208-214.5 s;
+  Lead Vocals11 108.5-111 s; nim 66.5-69 s; vocal.wav 35.5-38 s; s2 1.5-4 s.
+- Groups now: male 14 stems (13 spectral), female 7. Spectra are a trimmed mean (the most extreme stem on each side
+  of every band is dropped), so one odd stem cannot pull the target; crest, spread and width meter are medians.
+- What moved (new minus old target): male +1 to +2.3 dB over 4-12.5 kHz and -1 dB at 800 Hz-1 kHz; female
+  +1.3 to +2.3 dB at 1-1.25 kHz and 4-5 kHz, -3.5 dB at 315 Hz, -1 to -2 dB at 8-16 kHz; below 160 Hz both are lower
+  (most Suno stems are cut there). Male crest 8.8 -> 9.15 dB, spread 5.06 -> 3.99 dB; female crest 8.4, spread 5.62.
+- WIDTH ENVELOPE gains refitted in closed loop (with WIDTH TIMING on) to the new pooled targets: female 1-4 kHz
+  opens more on the quieter parts (0/0/7.5/9.6/12 dB), male opens a little less on the loud parts.
+- SILK in the presets set from the SUNO MATCH tone row: male average family (Suno Male, Black Male, Dreamy Male,
+  Pouria Signature) 2 dB (3 dB read +1.0 dB too bright against the brighter new male target), the rest 3 dB.
+  MATCH tone now +0.1..+0.5 dB on both male test takes and +0.5 dB on the female take for every preset.
+- Updated: Suno Male, Black Male, Dreamy Male, Pouria Signature, Suno Female, Black Female, Dreamy Female, Velvet
+  Female (targets) and the width envelope of all 12. The single-stem presets (Radio, Blue, Velvet Male, Suno Lead
+  Reference) keep their own targets and character.
+- Old sessions keep their sound (a session stores its own copy of the preset). Preset files you edited are not
+  touched; unedited factory copies are refreshed. Golden metrics of the updated presets regenerated; session_v2_0
+  and the single-stem legacy entries still match bit-exact.
+
 ## v2.9.0 (SILK)
 - Pouria put a Baxandall tone control after Suno Chain on a female take and heard it "sweeter, velvet, nothing
   damaged". Measured (with / without): no saturation (the non-linear residue falls on loud parts: it is the mp3's),

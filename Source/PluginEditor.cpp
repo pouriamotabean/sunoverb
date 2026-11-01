@@ -783,7 +783,7 @@ void Root::paint (juce::Graphics& g)
             g.fillRoundedRectangle (bx - 1.0f, cy - h / 2, 2.0f, h, 1.0f);
         }
         g.setFont (inter (21.0f, 500)); g.drawText ("suno chain", juce::Rectangle<float> (x + 44, cy - 18, 230, 28), juce::Justification::centredLeft, false);
-        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("2.9.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
+        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("3.0.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
         g.setColour (col::dim); g.setFont (inter (10.5f)); g.drawText ("by pouria motabean", juce::Rectangle<float> (x + 45, cy + 9, 230, 14), juce::Justification::centredLeft, false);
     }
 }
