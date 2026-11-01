@@ -95,6 +95,14 @@ public:
     //       4 S/Z (sibilants 4-12.5 kHz re vowel), 5 loudness (LUFS, after Output)
     struct MatchSnapshot { std::array<bool, 6> ok {}; std::array<float, 6> v {}; float toneErr = 0; };
     MatchSnapshot getMatch() const;
+    // v3.2 LEVELS page: what goes in, what the compressors take and give back, what comes out
+    struct LevelSnapshot
+    {
+        float inPeak = -100, inMs = 0, outPeak = -100, gr1 = 0, gr2 = 0, deess = 0;
+        float stageDb = 0, makeupDb = 0, loudGainDb = 0, outputDb = 0, outLufs = -100, targetLufs = -19.4f, singLevel = 0;
+        bool hasSource = false; uint32_t blocks = 0;
+    };
+    LevelSnapshot getLevels() const;
 
 private:
     void parameterChanged (const juce::String&, float) override { dirty = true; }

@@ -1,4 +1,4 @@
-# Suno Chain v3.1.0
+# Suno Chain v3.2.0
 
 A VST3 plugin that processes a dry vocal to sound like a Suno vocal. It works without a preset, using the built-in "Suno Lead 01". Each Suno vocal you analyze becomes a new `.json` preset.
 
@@ -8,6 +8,16 @@ GitHub builds a Windows installer on every push. When the run is green it is pub
 `C:\Program Files\Common Files\VST3` (old version removed first), appears in Windows "Apps" for uninstalling, and
 never touches your presets (the plugin writes the factory presets itself). If a run is red, the installer is still
 in the run's artifacts (SunoChain-Setup).
+## v3.2.0 (LEVELS page, window size 50 - 200 %; the sound is unchanged)
+- **LEVELS** (new display page, next to match): no meter plugin needed before Suno Chain any more.
+  - input: peak with a 3 s hold, 300 ms RMS, your singing level from Learn, the auto gain the plugin applies inside
+    (brings your singing to -18 dBFS), and a hint (clipping / very low / good);
+  - compression: total gain reduction with a 3 s hold marker, then compressor, leveler, s / z (de-esser) and makeup;
+  - output: peak with hold, loudness over the last 30 s next to the Suno vocal's, match loudness and output gain.
+- **Window size**: "size" in the bottom bar opens 50 / 75 / 100 / 125 / 150 / 175 / 200 %; the corner still resizes
+  freely (now 50 - 200 %). The last size chosen is remembered on this computer and every new window opens at it
+  (`%APPDATA%\SunoChain\SunoChain.settings`).
+
 ## v3.1.0 (LOW CUT under the singer's lowest note)
 - Measured below the voice (1/6-octave, loud parts): the Suno stems have nothing there but a floor ~22-28 dB under
   the mids, flat from 30 Hz up to where the voice starts. Our output had 9-10 dB more on the male takes (a flat

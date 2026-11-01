@@ -912,6 +912,28 @@ SunoChainProcessor::MatchSnapshot SunoChainProcessor::getMatch() const
     return m;
 }
 
+SunoChainProcessor::LevelSnapshot SunoChainProcessor::getLevels() const
+{
+    LevelSnapshot l;
+    l.inPeak = chain.mIn.load(); l.inMs = chain.mInMs.load(); l.outPeak = chain.mOut.load();
+    l.gr1 = chain.mGr1.load(); l.gr2 = chain.mGr2.load(); l.deess = chain.mDeess.load(); l.blocks = chain.mBlocks.load();
+    l.stageDb = chain.mStageDb.load(); l.makeupDb = chain.mMakeupDb.load();
+    l.loudGainDb = apvts.getRawParameterValue ("loudGain")->load(); l.outputDb = apvts.getRawParameterValue ("output")->load();
+    {
+        const juce::SpinLock::ScopedLockType sl (presetLock);
+        l.targetLufs = targetLufs; l.hasSource = hidden.hasSourceLevel; l.singLevel = hidden.sourceLevelDb;
+    }
+    {
+        const juce::SpinLock::ScopedTryLockType ml (meterLock);   // prepareToPlay may be resetting the meter
+        if (ml.isLocked())
+        {
+            const float lu = chain.matchMeter.lufs();
+            if (lu > -99.0f) l.outLufs = lu + juce::Decibels::gainToDecibels (chain.outGain, -100.0f);
+        }
+    }
+    return l;
+}
+
 SunoChainProcessor::Meters SunoChainProcessor::getMeters() const
 {
     Meters m { chain.mGr1.load(), chain.mGr2.load(), chain.mDuck.load(), chain.mIn.load(), chain.mOut.load(), chain.mWidth.load(),
@@ -1007,7 +1029,7 @@ void SunoChainProcessor::setStateInformation (const void* data, int sizeInBytes)
         hidden.sourceCrestDb = hidden.hasSource ? (float) finiteOr (extra.getProperty ("sourceCrest", 0.0), 0.0, 60.0, 0.0) : 0.0f;
         hidden.sourceSpreadDb = hidden.hasSource ? (float) finiteOr (extra.getProperty ("sourceSpread", 0.0), 0.0, 60.0, 0.0) : 0.0f;
         advancedOpen = (bool) extra.getProperty ("advancedOpen", false);
-        uiScale = (float) finiteOr (extra.getProperty ("uiScale", 1.0), 0.6, 1.6, 1.0);
+        uiScale = (float) finiteOr (extra.getProperty ("uiScale", 1.0), 0.5, 2.0, 1.0);
         {
             const auto pf = extra.getProperty ("presetFile", "").toString();
             currentPresetFile = juce::File::isAbsolutePath (pf) ? juce::File (pf) : juce::File();

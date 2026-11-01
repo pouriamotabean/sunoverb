@@ -377,6 +377,7 @@ void Display::paint (juce::Graphics& g)
     g.setColour (juce::Colour (0xff2a2a2c)); g.strokePath (p, juce::PathStrokeType (1.0f));
     g.setColour (col::line); g.drawHorizontalLine ((int) (r.getBottom() - bottomInset), r.getX() + 18, r.getRight() - 18);
     r = r.withTrimmedBottom (bottomInset);
+    if (mode == 8) { paintLevels (g, r); return; }
     if (mode >= 3)
     {   // a section page: its name and a note; the knobs sit on top
         g.setColour (col::text); g.setFont (inter (20.0f, 500));
@@ -534,6 +535,101 @@ void Display::paintMatch (juce::Graphics& g, juce::Rectangle<float> r)
 }
 
 //==============================================================================
+// v3.2 LEVELS: input, compression and output in numbers (no separate meter plugin needed before Suno Chain)
+void Display::setLevels (const SunoChainProcessor::LevelSnapshot& l)
+{
+    lev = l;
+    idle = l.blocks == lastBlocks ? idle + 1 : 0; lastBlocks = l.blocks;
+    const bool off = idle > 3;
+    const auto now = juce::Time::getMillisecondCounter();
+    auto hold = [&] (Hold& h, float v, float fall)
+    {
+        h.v = std::max (v, h.v - fall);
+        if (v >= h.held || now - h.at > 3000) { h.held = v; h.at = now; }
+    };
+    hold (inPk, off ? -100.0f : l.inPeak, 1.5f);
+    hold (outPk, off ? -100.0f : l.outPeak, 1.5f);
+    const float silent = off || l.inPeak < -70.0f;
+    hold (grH, silent ? 0.0f : l.gr1 + l.gr2, 0.4f);
+    inRms = off ? -100.0f : juce::Decibels::gainToDecibels (std::sqrt (std::max (0.0f, l.inMs)), -100.0f);
+    auto fall = [] (float& cur, float v, float rate) { cur = std::max (v, cur - rate); };
+    fall (gr1s, silent ? 0.0f : l.gr1, 0.4f); fall (gr2s, silent ? 0.0f : l.gr2, 0.4f); fall (dss, silent ? 0.0f : l.deess, 0.8f);
+    if (mode == 8) repaint();
+}
+
+void Display::paintLevels (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    auto area = r.reduced (26, 0).withTrimmedTop (22).withTrimmedBottom (10);
+    const float cw = area.getWidth() / 3.0f;
+    auto num = [] (float v, int dec = 1, bool sign = false)
+    { return v <= -99.0f ? juce::String ("-inf") : (sign && v > 0.05f ? "+" : "") + juce::String (v, dec); };
+    auto column = [&] (int i, const juce::String& title, const juce::String& big, const juce::String& unit, float barV, float holdV,
+                       float lo, float hi, bool fromRight, const std::vector<std::pair<juce::String, juce::String>>& rows,
+                       const juce::String& status, bool warn)
+    {
+        auto c = juce::Rectangle<float> (area.getX() + cw * (float) i, area.getY(), cw - 28, area.getHeight());
+        if (i > 0) { g.setColour (juce::Colours::white.withAlpha (0.05f)); g.drawVerticalLine ((int) (c.getX() - 14), c.getY(), c.getBottom()); }
+        drawCaps (g, title, c.withHeight (14), col::dim, 9.5f, juce::Justification::centredLeft);
+        g.setColour (warn ? col::amber : col::text); g.setFont (inter (30.0f, 500));
+        g.drawText (big, juce::Rectangle<float> (c.getX(), c.getY() + 18, c.getWidth(), 38), juce::Justification::centredLeft, false);
+        const float bw = juce::GlyphArrangement::getStringWidth (inter (30.0f, 500), big);
+        g.setColour (col::dim); g.setFont (inter (10.5f));
+        g.drawText (unit, juce::Rectangle<float> (c.getX() + bw + 8, c.getY() + 34, 120, 16), juce::Justification::centredLeft, false);
+        // bar
+        auto bar = juce::Rectangle<float> (c.getX(), c.getY() + 66, c.getWidth(), 6);
+        g.setColour (juce::Colours::white.withAlpha (0.07f)); g.fillRoundedRectangle (bar, 3.0f);
+        auto frac = [&] (float v) { return juce::jlimit (0.0f, 1.0f, (v - lo) / (hi - lo)); };
+        const float fv = frac (barV), fh = frac (holdV);
+        auto fill = fromRight ? bar.withLeft (bar.getRight() - bar.getWidth() * fv) : bar.withWidth (bar.getWidth() * fv);
+        g.setColour (warn ? col::amber : col::text.withAlpha (0.85f)); g.fillRoundedRectangle (fill, 3.0f);
+        if (fh > 0.0f)
+        {
+            const float hx = fromRight ? bar.getRight() - bar.getWidth() * fh : bar.getX() + bar.getWidth() * fh;
+            g.setColour (col::amber); g.fillRect (juce::Rectangle<float> (hx - 1.0f, bar.getY() - 3, 2.0f, bar.getHeight() + 6));
+        }
+        float y = c.getY() + 88;
+        for (const auto& [k, v] : rows)
+        {
+            g.setColour (col::dim); g.setFont (inter (11.0f));
+            g.drawText (k, juce::Rectangle<float> (c.getX(), y, c.getWidth() - 80, 18), juce::Justification::centredLeft, false);
+            g.setColour (col::text.withAlpha (0.9f)); g.setFont (mono (11.0f));
+            g.drawText (v, juce::Rectangle<float> (c.getRight() - 110, y, 110, 18), juce::Justification::centredRight, false);
+            g.setColour (juce::Colours::white.withAlpha (0.04f)); g.drawHorizontalLine ((int) (y + 20), c.getX(), c.getRight());
+            y += 25;
+        }
+        g.setColour (warn ? col::amber : col::dim.withAlpha (0.8f)); g.setFont (inter (10.5f));
+        g.drawText (status, juce::Rectangle<float> (c.getX(), c.getBottom() - 16, c.getWidth(), 16), juce::Justification::centredLeft, false);
+    };
+    const bool sig = idle <= 3 && lev.inPeak > -70.0f;
+    {   // input
+        const bool clip = inPk.held > -0.3f, low = sig && inPk.held < -40.0f;
+        column (0, "input", num (inPk.held), "dBFS peak", inPk.v, inPk.held, -60.0f, 0.0f, false,
+                { { "level (300 ms rms)", num (inRms) + " dB" },
+                  { "your singing (learned)", lev.hasSource ? num (lev.singLevel) + " dB" : juce::String ("learn first") },
+                  { "auto gain inside", lev.hasSource ? num (lev.stageDb, 1, true) + " dB" : juce::String ("-") } },
+                ! sig ? juce::String ("no signal") : clip ? juce::String ("clipping: turn the input down")
+                      : low ? juce::String ("very low: raise the input") : juce::String ("good: peaks under 0 dB, Learn sets the rest"),
+                clip || low);
+    }
+    auto grTxt = [] (float v) { return (v < 0.05f ? juce::String ("0.0") : "-" + juce::String (v, 1)) + " dB"; };
+    {   // compression
+        column (1, "compression", grH.v < 0.05f ? juce::String ("0.0") : "-" + juce::String (grH.v, 1), "dB gain reduction", grH.v, grH.held,
+                0.0f, 15.0f, false,
+                { { "compressor", grTxt (gr1s) }, { "leveler", grTxt (gr2s) },
+                  { "s / z (de-esser)", grTxt (dss) }, { "makeup", num (lev.makeupDb, 1, true) + " dB" } },
+                "marker = the most in the last 3 s", false);
+    }
+    {   // output
+        const bool clip = outPk.held > -0.1f;
+        column (2, "output", num (outPk.held), "dBFS peak", outPk.v, outPk.held, -60.0f, 0.0f, false,
+                { { "loudness (last 30 s)", lev.outLufs > -99.0f ? num (lev.outLufs) + " LUFS" : juce::String ("listening") },
+                  { "suno vocal", num (lev.targetLufs) + " LUFS" },
+                  { "match loudness", num (lev.loudGainDb, 1, true) + " dB" }, { "output", num (lev.outputDb, 1, true) + " dB" } },
+                clip ? juce::String ("clipping: lower the output") : juce::String ("match loudness sets the level like suno"), clip);
+    }
+}
+
+//==============================================================================
 void Meters::update (const SunoChainProcessor::Meters& m)
 {
     idleTicks = m.blocks == lastBlocks ? idleTicks + 1 : 0;
@@ -627,13 +723,13 @@ Root::Root (SunoChainProcessor& p) : proc (p)
         { { "wLevel", "Width" }, { "wTone", "Tone" }, { "wMotion", "Held Notes" }, { "lwLow", "Width Low" }, { "lwMid", "Width Mid" }, { "lwHigh", "Width High" } },
         { { "dlyLevel", "Level" }, { "dlyFb", "Feedback" }, { "dlyTime", "Time" }, { "dlyToRev", "Into Reverb" },
           { "dwLow", "Width Low" }, { "dwMid", "Width Mid" }, { "dwHigh", "Width High" } } };
-    pageKnobs.assign (8, {});
+    pageKnobs.assign (9, {});
     for (size_t pg = 0; pg < pages.size(); ++pg)
         for (const auto& d : pages[pg]) { addKnob (d.id, d.name, 46); pageKnobs[pg + 3].push_back (d.id); }
 
     {   // page names in the display's bottom strip, section names on the face (click = open its page)
-        const char* names[8] { "eq", "stereo", "match", "tone", "dynamics", "space", "width", "echo" };
-        for (int i = 0; i < 8; ++i)
+        const char* names[9] { "eq", "stereo", "match", "tone", "dynamics", "space", "width", "echo", "levels" };   // v3.2: levels = page 8
+        for (int i = 0; i < 9; ++i)
         {
             auto* t = pageTabs.add (new TextLink (names[i], 11.0f));
             t->underlineWhenOn = true; t->onClick = [this, i] { setPage (i); };
@@ -674,6 +770,18 @@ Root::Root (SunoChainProcessor& p) : proc (p)
     noteBox.addItemList ({ "1/4", "1/8 dotted", "1/8", "1/8 triplet", "1/16" }, 1);
     addAndMakeVisible (noteBox);
     noteAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "dlyNote", noteBox);
+
+    sizeB.setTooltip ("Window size (the corner still resizes freely); remembered for the next windows");
+    sizeB.onClick = [this]
+    {
+        juce::PopupMenu m;
+        const float cur = currentSize ? currentSize() : 1.0f;
+        for (int pc : { 50, 75, 100, 125, 150, 175, 200 })
+            m.addItem (pc, juce::String (pc) + " %", true, std::abs (cur * 100.0f - (float) pc) < 0.5f);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&sizeB),
+                         [this] (int r) { if (r > 0 && onSize) onSize ((float) r / 100.0f); });
+    };
+    addAndMakeVisible (sizeB);
 
     setSize (kW, kH);
     setPage (0);
@@ -750,12 +858,12 @@ void Root::setPage (int p)
 {
     page = p;
     display.setMode (p);
-    static const char* titles[8] { "", "", "", "tone", "dynamics", "space", "width", "echo" };
-    static const char* notes[8] { "", "", "", "100 % = as learned.  silk = a broad soft lift of the top (kept by Learn).  loudness = the match loudness gain.",
+    static const char* titles[9] { "", "", "", "tone", "dynamics", "space", "width", "echo", "" };
+    static const char* notes[9] { "", "", "", "100 % = as learned.  silk = a broad soft lift of the top (kept by Learn).  loudness = the match loudness gain.",
                                   "100 % = as learned.  rider evens the words, breath lowers the breaths between phrases.",
                                   "the reverb.  width low / mid / high = side only (mono stays untouched): < 300 Hz / 300 Hz - 4 kHz / > 4 kHz.",
                                   "the width layer: side only, mono stays untouched.  width low / mid / high = per band.",
-                                  "the echo, ducked with the reverb.  width low / mid / high = its width per band." };
+                                  "the echo, ducked with the reverb.  width low / mid / high = its width per band.", "" };
     display.pageTitle = titles[p]; display.pageNote = notes[p];
     for (int i = 0; i < pageTabs.size(); ++i) pageTabs[i]->setToggleState (i == p, juce::dontSendNotification);
     const int secPage[4] { 3, 5, 6, 7 };
@@ -796,7 +904,7 @@ void Root::paint (juce::Graphics& g)
             g.fillRoundedRectangle (bx - 1.0f, cy - h / 2, 2.0f, h, 1.0f);
         }
         g.setFont (inter (21.0f, 500)); g.drawText ("suno chain", juce::Rectangle<float> (x + 44, cy - 18, 230, 28), juce::Justification::centredLeft, false);
-        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("3.1.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
+        g.setColour (col::faint); g.setFont (mono (10.0f)); g.drawText ("3.2.0", juce::Rectangle<float> (x + 174, cy - 12, 60, 16), juce::Justification::centredLeft, false);
         g.setColour (col::dim); g.setFont (inter (10.5f)); g.drawText ("by pouria motabean", juce::Rectangle<float> (x + 45, cy + 9, 230, 14), juce::Justification::centredLeft, false);
     }
 }
@@ -814,10 +922,12 @@ void Root::resized()
     display.setBounds (disp);
     {   // page names in the display's bottom strip
         int x = disp.getX() + 18; const int y = disp.getBottom() - 32;
-        for (int i = 0; i < pageTabs.size(); ++i)
+        static const int order[9] { 0, 1, 2, 8, 3, 4, 5, 6, 7 };   // graphs (eq, stereo, match, levels) | sections
+        for (int j = 0; j < pageTabs.size(); ++j)
         {
+            const int i = order[j];
             const int w = (int) juce::GlyphArrangement::getStringWidth (inter (12.1f, 600), pageTabs[i]->getButtonText()) + 26;
-            if (i == 3) x += 30;   // graphs | sections
+            if (j == 4) x += 30;
             pageTabs[i]->setBounds (x, y, w, 28); x += w;
         }
     }
@@ -865,7 +975,8 @@ void Root::resized()
         row ({ "dlyLevel", "dlyFb", "#time", "#sync" }, r1);           row ({ "dlyToRev", "dwLow", "dwMid", "dwHigh" }, r2);
     }
 
-    status.setBounds (70, 742, 400, 20);
+    sizeB.setBounds (60, 738, 96, 30);
+    status.setBounds (166, 742, 330, 20);
     freezeB.setBounds (520, 738, 110, 30);
     lcd.setVisible (false);
     listenSel.setBounds (642, 738, 186, 30);
@@ -914,6 +1025,7 @@ void Root::tick()
     proc.pumpMeters();   // v2.0.1: the WIDTH analysis runs here, not in the audio callback
     auto m = proc.getMeters();
     meters.update (m);
+    display.setLevels (proc.getLevels());
     display.setWidth (m.widthBands);
     const bool sync = proc.apvts.getRawParameterValue ("dlySync")->load() > 0.5f;
     if (sync != lastSync) { lastSync = sync; setPage (page); }   // echo page: note box or time knob
@@ -1025,10 +1137,23 @@ void Root::toggleLearn()
 } // namespace ui
 
 //==============================================================================
+// v3.2: the window size is remembered on this computer (not per session): the last size chosen opens every new
+// window. File: <user app data>/SunoChain/SunoChain.settings
+namespace
+{
+constexpr float kMinScale = 0.5f, kMaxScale = 2.0f;
+}
+
 SunoChainEditor::SunoChainEditor (SunoChainProcessor& p) : AudioProcessorEditor (&p), proc (p), root (p)
 {
     addAndMakeVisible (root);
     root.onAdvanced = [this] (bool open) { applyLayout (open); };
+    root.onSize = [this] (float s) { setScale (s); };
+    root.currentSize = [this] { return (float) getWidth() / (float) logicalW; };
+    {
+        const double g = settings->file->getDoubleValue ("uiScale", -1.0);
+        if (g > 0.0) proc.uiScale = (float) g;   // the last size chosen on this computer wins over the session's
+    }
     setResizable (true, true);
     setConstrainer (&constrainer);
     applyLayout (proc.advancedOpen);
@@ -1042,16 +1167,30 @@ void SunoChainEditor::applyLayout (bool advanced)
     const int lh = ui::kH;
     juce::ignoreUnused (advanced); logicalW = ui::kW;   // v2.7: one size
     root.setSize (logicalW, lh);
-    const float s = juce::jlimit (0.6f, 1.6f, proc.uiScale);
+    const float s = juce::jlimit (kMinScale, kMaxScale, proc.uiScale);
     constrainer.setFixedAspectRatio ((double) logicalW / (double) lh);
-    constrainer.setSizeLimits ((int) ((float) logicalW * 0.6f), (int) ((float) lh * 0.6f), (int) ((float) logicalW * 1.6f), (int) ((float) lh * 1.6f));
+    constrainer.setSizeLimits ((int) ((float) logicalW * kMinScale), (int) ((float) lh * kMinScale),
+                               (int) ((float) logicalW * kMaxScale), (int) ((float) lh * kMaxScale));
     setSize (juce::roundToInt ((float) logicalW * s), juce::roundToInt ((float) lh * s));
     resized();
+}
+
+void SunoChainEditor::setScale (float s)
+{
+    s = juce::jlimit (kMinScale, kMaxScale, s);
+    setSize (juce::roundToInt ((float) logicalW * s), juce::roundToInt ((float) ui::kH * s));
 }
 
 void SunoChainEditor::resized()
 {
     const float s = (float) getWidth() / (float) logicalW;
     root.setTransform (juce::AffineTransform::scale (s));
-    if (getWidth() > 0) proc.uiScale = s;
+    if (getWidth() <= 0) return;
+    proc.uiScale = s;
+    root.setSizeLabel (juce::roundToInt (s * 100.0f));
+    if (std::abs (s - lastSaved) > 0.001f)
+    {
+        settings->file->setValue ("uiScale", (double) s);   // written ~1 s later (and when the last window closes)
+        lastSaved = s;
+    }
 }

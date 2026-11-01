@@ -132,6 +132,7 @@ public:
     void setCurves (const SunoChainProcessor::CurveSnapshot& s) { snap = s; repaint(); }
     void setWidth (const std::array<float, 6>& w) { widthBands = w; if (mode == 1) repaint(); }
     void setMatch (const SunoChainProcessor::MatchSnapshot& m) { match = m; if (mode == 2) repaint(); }
+    void setLevels (const SunoChainProcessor::LevelSnapshot&);   // v3.2 LEVELS page (mode 8)
     void setMode (int m) { mode = m; repaint(); }
     int getMode() const { return mode; }
     // v2.7: pages 3..7 show a section's controls (knobs are separate components on top); the bottom strip
@@ -143,6 +144,10 @@ private:
     void paintEq (juce::Graphics&, juce::Rectangle<float>);
     void paintWidth (juce::Graphics&, juce::Rectangle<float>);
     void paintMatch (juce::Graphics&, juce::Rectangle<float>);
+    void paintLevels (juce::Graphics&, juce::Rectangle<float>);
+    SunoChainProcessor::LevelSnapshot lev;
+    struct Hold { float v = -100, held = -100; juce::uint32 at = 0; };   // live value (falls) + 3 s peak hold
+    Hold inPk, outPk, grH; float inRms = -100, gr1s = 0, gr2s = 0, dss = 0; juce::uint32 lastBlocks = 0; int idle = 0;
     SunoChainProcessor::CurveSnapshot snap;
     SunoChainProcessor::MatchSnapshot match;
     std::array<float, 6> widthBands { -100, -100, -100, -100, -100, -100 };
@@ -178,6 +183,9 @@ public:
     void resized() override;
     void tick();
     std::function<void (bool)> onAdvanced;
+    std::function<void (float)> onSize;       // v3.2: window size 50 - 200 % (menu); remembered for every new window
+    std::function<float()> currentSize;
+    void setSizeLabel (int pct) { sizeB.setButtonText ("size " + juce::String (pct) + "%"); }
 
 private:
     Knob& addKnob (const juce::String& id, const juce::String& name, int size, bool violet = false, bool big = false, const juce::String& key = {});
@@ -200,6 +208,7 @@ private:
     PresetPill pill;
     FlatButton loadB { "LOAD" }, saveB { "SAVE" }, learnB { "LEARN" }, clearB { "CLEAR" };
     SlideSwitch advancedB { "ADVANCED" };
+    TextLink sizeB { "size 100%", 11.0f };
     GlassButton matchB { "MATCH LOUDNESS" }, freezeB { "FREEZE" };
     Selector listenSel;
     LeverSwitch blackSw;
@@ -218,6 +227,20 @@ private:
 };
 } // namespace ui
 
+// v3.2: the window size is remembered on this computer (not per session): the last size chosen opens every new
+// window. File: <user app data>/SunoChain/SunoChain.settings (shared by every open window)
+struct SunoChainUiSettings
+{
+    SunoChainUiSettings()
+    {
+        juce::PropertiesFile::Options o;
+        o.applicationName = "SunoChain"; o.folderName = "SunoChain"; o.filenameSuffix = "settings";
+        o.osxLibrarySubFolder = "Application Support"; o.millisecondsBeforeSaving = 800;
+        file = std::make_unique<juce::PropertiesFile> (o);
+    }
+    std::unique_ptr<juce::PropertiesFile> file;
+};
+
 class SunoChainEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -229,7 +252,10 @@ public:
 private:
     void timerCallback() override { root.tick(); }
     void applyLayout (bool advanced);
+    void setScale (float s);
     int logicalW = ui::kW;
+    float lastSaved = -1;
+    juce::SharedResourcePointer<SunoChainUiSettings> settings;
     SunoChainProcessor& proc;
     ui::Root root;
     juce::ComponentBoundsConstrainer constrainer;

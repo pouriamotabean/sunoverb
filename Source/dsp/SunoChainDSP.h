@@ -2046,6 +2046,7 @@ public:
     float duckEnv = 0, duckGr = 0, duckEnvCoef = 0, duckAtk = 0, duckRel = 0, phraseRef = -100, phraseDecay = 0;
     float freezeHf = 0.063f, rmsEnv = 0, rmsCoef = 0, holdEnv = 0, holdCoef = 0, holdDb = -60; bool punchOn = true;
     float trFast = 0, trSlow = 0, trFa = 0, trFr = 0, trSa = 0, trSr = 0, trGainDb = 0, trSm = 0, punchAmt = 0;
+    float compMakeupDb = 0, inMsEnv = 0;
     float inGain = 1, outGain = 1, wetGain = 0, delayGain = 0, delaySend = 0, satDrive = 1, satMix = 0;
     bool breathOn = false;
     float predelaySamp = 0; int lastRevMode = -1, oldRevMode = -1; float oldRevFade = 0.0f, oldRevCoef = 0.999f, oldRevComp = 1.0f, freezeAmt = 0.0f, freezeCoef = 0.999f;
@@ -2057,6 +2058,7 @@ public:
     bool eqValid = false;
     // meters (written by the audio thread, read by the editor)
     std::atomic<float> mGr1 { 0 }, mGr2 { 0 }, mDuck { 0 }, mIn { -100 }, mOut { -100 }, mWidth { -100 }, mDelayMs { 0 }, mDeess { 0 };
+    std::atomic<float> mInMs { 0 }, mStageDb { 0 }, mMakeupDb { 0 };   // v3.2 LEVELS page: input mean square, auto gain, comp makeup
     std::atomic<uint32_t> mBlocks { 0 };   // lets the editor see when the host stopped calling us
     std::array<std::atomic<float>, 6> mWidthBands {};    // side-mid dB: [0..2] singing low/mid/high, [3..5] pauses (-100 = no data); bands 100-300 / 400-3k / 5-12k
 
@@ -2124,6 +2126,7 @@ public:
         float stage = (p.autoGainStage && p.hasSourceLevel) ? std::clamp (-18.0f - p.sourceLevelDb, -24.0f, 30.0f) : 0.0f;
         inGain = dbToGain (stage);
         restoreGain = dbToGain (-stage);
+        mStageDb = stage;
         outGain = dbToGain (-stage + p.outputDb + p.loudGainDb);   // v1.8: + Match Loudness gain (held)
         auto corr = computeCorrection (p);
         if (corr != lastCorrection || ! eqValid || p.eqExact != lastEqExact)
@@ -2140,6 +2143,7 @@ public:
             const float pr = 1.0f + 3.0f * cAmt * std::max (0.0f, p.peakScale);
             const float makeup = VocalComp::curve (2.0f, ratio, 8.0f);         // keep the loud phrases' level
             vc.set (thrOpt, ratio, atkMs, relScale, -8.0f, pr, makeup, p.optoFastRelMs, p.optoSlowRelMs);
+            compMakeupDb = makeup;
             freezeHoldLen = (int) (0.03 * fs);
             freezeHf = dbToGain (0.5f * p.freezeHfDb) * dbToGain (0.5f * p.freezeHfDb);   // power ratio
         }
@@ -2157,6 +2161,7 @@ public:
         const float spd = std::clamp (p.speedScale, 0.25f, 4.0f);   // >1 = faster
         if (p.rideOn) r2 = 1.0f;   // v1.13: the rider does the slow levelling (gently); the leveler made the phrases too flat
         c2.set (fs, r2 > 1.01f ? thr2 : 50.0f, r2, 150.0f / spd, 1000.0f / spd, r2 > 1.01f ? makeup2 : 0.0f);
+        mMakeupDb = compMakeupDb + (r2 > 1.01f ? makeup2 : 0.0f);
         rideGC = msToCoef (std::max (50.0f, p.rideSpeedMs) / spd, fs);
         onDip = dbToGain (-std::max (0.0f, p.onsetNarrowDb)); onRecC = msToCoef (std::max (5.0f, p.onsetNarrowMs), fs);
         rmsCoef = msToCoef (20.0f, fs);
@@ -2287,13 +2292,13 @@ public:
         const float duckDepth = p.duckDb * std::clamp (p.amount, 0.0f, 1.0f);
         const float presenceFloor = -18.0f - 15.0f;
         const float dlyMs = currentDelayMs();
-        float maxGr1 = 0, maxGr2 = 0, maxDuck = 0, pkIn = 0, pkOut = 0, wE = 0, dE = 0, maxDs = 0;
+        float maxGr1 = 0, maxGr2 = 0, maxDuck = 0, pkIn = 0, pkOut = 0, wE = 0, dE = 0, maxDs = 0, msIn = 0;
         inBlock = true;
         const bool learnOn = learner.active.load(), loudOn = loud.active.load();
         for (int i = 0; i < n; ++i)
         {
             float l = L[i], r = R ? R[i] : L[i];
-            pkIn = std::max (pkIn, std::max (std::abs (l), std::abs (r)));
+            pkIn = std::max (pkIn, std::max (std::abs (l), std::abs (r))); msIn += 0.5f * (l * l + r * r);
             const float rawMono = 0.5f * (l + r);
             l *= inGain; r *= inGain;
             if (lowCutOn || lowCutMix > 0.0f)   // v3.1 LOW CUT (off = untouched, bit-exact)
@@ -2493,7 +2498,7 @@ public:
         }
         mDelayMs = dlyMs; mDeess = maxDs;
         mBlocks = mBlocks.load() + 1;
-        mGr1 = maxGr1; mGr2 = maxGr2; mDuck = maxDuck; mIn = gainToDb (pkIn); mOut = gainToDb (pkOut);
+        mGr1 = maxGr1; mGr2 = maxGr2; mDuck = maxDuck; mIn = gainToDb (pkIn); mOut = gainToDb (pkOut); if (n > 0) { const float c = (float) std::exp (-n / (0.3 * fs)); inMsEnv = c * inMsEnv + (1 - c) * msIn / (float) n; mInMs = inMsEnv; }   // ~300 ms RMS
         mWidth = dE > 1e-9f ? 10 * std::log10 (wE / dE + 1e-12f) : -100.0f;
         inBlock = false;
     }
